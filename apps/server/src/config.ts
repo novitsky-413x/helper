@@ -3,7 +3,11 @@ import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.resolve(__dirname, "../../.env") });
+// Monorepo: src/ and dist/ live under apps/server — repo-root .env is three levels up.
+dotenv.config({
+  path: path.resolve(__dirname, "../../../.env"),
+  override: true,
+});
 
 export const config = {
   port: Number(process.env.PORT) || 3001,
@@ -22,5 +26,22 @@ export const config = {
     process.env.MEM0_HISTORY_DB ||
     path.resolve(__dirname, "../data/mem0-history.db"),
   maxToolRounds: Number(process.env.MAX_TOOL_ROUNDS) || 8,
+
+  /** Directory containing Vosk model (am, conf, graph, …). Empty disables local STT. */
+  voskModelPath: process.env.VOSK_MODEL_PATH?.trim() || "",
+  /** Piper executable (e.g. piper.exe). Empty disables local TTS. */
+  piperExecutable: process.env.PIPER_EXECUTABLE?.trim() || "",
+  /** Piper voice model (.onnx). Use a Russian voice for ru-RU. */
+  piperModelPath: process.env.PIPER_RU_MODEL?.trim() || process.env.PIPER_MODEL_PATH?.trim() || "",
+  voiceSampleRate: Number(process.env.VOICE_SAMPLE_RATE) || 16000,
+  /** Python for `scripts/vosk_stt_bridge.py` (Node `vosk` uses native bindings; bridge avoids node-gyp). */
+  voicePython: process.env.VOICE_PYTHON?.trim() || "python",
+
+  /** Pino level: trace | debug | info | warn | error | fatal */
+  logLevel: (process.env.LOG_LEVEL || "info").toLowerCase(),
+  /** Pretty-print logs on stdout (still JSON if false). */
+  logPretty: process.env.LOG_PRETTY === "1" || process.env.LOG_PRETTY === "true",
+  /** Append the same logs to this file (JSON lines). Directory is created if needed. */
+  logFile: process.env.LOG_FILE?.trim() || "",
 };
 

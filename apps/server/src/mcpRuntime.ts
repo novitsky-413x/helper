@@ -3,6 +3,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { jsonSchema, tool, type ToolSet } from "ai";
 import type { McpServerRecord } from "./store.js";
+import { logger } from "./logger.js";
 
 type Conn = { client: Client; record: McpServerRecord };
 
@@ -99,7 +100,7 @@ export async function buildMcpToolSet(servers: McpServerRecord[]): Promise<ToolS
     try {
       client = await ensureMcpClient(s);
     } catch (e) {
-      console.warn("[mcp] skip server (connect failed)", s.name, e);
+      logger.warn({ server: s.name, err: e }, "mcp skip server (connect failed)");
       continue;
     }
     const listed = await client.listTools();

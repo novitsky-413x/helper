@@ -5,8 +5,11 @@ import { streamText, convertToCoreMessages, type Message } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import path from "node:path";
 import { existsSync } from "node:fs";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
+import { logger } from "./logger.js";
+import { pinoHttp } from "pino-http";
 import { listChatModelsCached } from "./togetherModels.js";
 import { resolveChatModel } from "./classifyTier.js";
 import {
@@ -36,6 +39,7 @@ import {
   disconnectMcp,
 } from "./mcpRuntime.js";
 import { lastUserTextFromMessages } from "./messageUtils.js";
+import { attachVoiceWebSocket } from "./voice/voiceWs.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -47,6 +51,19 @@ app.use(
   })
 );
 app.use(express.json({ limit: "2mb" }));
+app.use(
+  pinoHttp({
+    logger,
+    customLogLevel: (req: IncomingMessage, res: ServerResponse, err?: Error) => {
+      if (err) return "error";
+      if (res.statusCode >= 500) return "error";
+      if (res.statusCode >= 400) return "warn";
+      const u = req.url ?? "";
+      if (u === "/api/health" || u.startsWith("/api/health?")) return "debug";
+      return "info";
+    },
+  })
+);
 
 const togetherLlm = createOpenAI({
   baseURL: "https://api.together.xyz/v1",
@@ -66,7 +83,7 @@ app.get("/api/models", async (_req, res) => {
     const models = await listChatModelsCached();
     res.json({ models });
   } catch (e) {
-    console.error(e);
+    logger.error({ err: e }, "GET /api/models failed");
     res.status(500).json({ error: String(e) });
   }
 });
@@ -96,7 +113,23 @@ app.post("/api/chat", async (req, res) => {
   );
 
   try {
-    const { model } = await resolveChatModel(requestedModel, lastUserText || "hello");
+    const { model, tier, skippedClassifier } = await resolveChatModel(
+      requestedModel,
+      lastUserText || "hello"
+    );
+
+    logger.info(
+      {
+        route: "POST /api/chat",
+        resolvedModel: model,
+        tier,
+        skippedClassifier,
+        profileId: profileId ?? null,
+        lastUserChars: lastUserText.length,
+        messageCount: uiMessages.length,
+      },
+      "chat request"
+    );
 
     let mem0UserId: string | undefined;
     if (profileId) {
@@ -132,7 +165,7 @@ app.post("/api/chat", async (req, res) => {
           try {
             await addConversationToMemory(mem0UserId, lastUserText, text);
           } catch (e) {
-            console.warn("[mem0] add failed", e);
+            logger.warn({ err: e, mem0UserId }, "mem0 addConversation failed");
           }
         }
       },
@@ -140,7 +173,7 @@ app.post("/api/chat", async (req, res) => {
 
     result.pipeDataStreamToResponse(res);
   } catch (e) {
-    console.error("[chat]", e);
+    logger.error({ err: e, route: "POST /api/chat" }, "chat handler failed");
     if (!res.headersSent) {
       res.status(500).json({ error: String(e) });
     }
@@ -293,12 +326,33 @@ if (existsSync(webDist)) {
   });
 }
 
-const server = app.listen(config.port, () => {
-  console.info(`[server] http://localhost:${config.port}`);
+const httpServer = createServer(app);
+attachVoiceWebSocket(httpServer);
+
+httpServer.on("error", (err) => {
+  logger.fatal({ err }, "HTTP server failed to bind or accept");
+  process.exit(1);
+});
+
+httpServer.listen(config.port, () => {
+  logger.info(
+    {
+      port: config.port,
+      webOrigin: config.webOrigin,
+      logFile: config.logFile || null,
+      logPretty: config.logPretty,
+      voice: {
+        voskConfigured: Boolean(config.voskModelPath),
+        piperConfigured: Boolean(config.piperExecutable && config.piperModelPath),
+      },
+    },
+    "HTTP server listening"
+  );
 });
 
 process.on("SIGINT", async () => {
+  logger.info("SIGINT received, closing");
   await disconnectAllMcp();
-  server.close();
+  httpServer.close();
   process.exit(0);
 });

@@ -1,6 +1,7 @@
 import { generateText } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { config } from "./config.js";
+import { logger } from "./logger.js";
 
 const together = createOpenAI({
   baseURL: "https://api.together.xyz/v1",
@@ -56,7 +57,7 @@ export async function resolveChatModel(
 
   const h = heuristicTier(lastUserText);
   if (h) {
-    console.info("[auto] classifier skipped (heuristic)", { tier: h });
+    logger.info({ tier: h }, "auto classifier skipped (heuristic)");
     return { model: tierToModel(h), tier: h, skippedClassifier: true };
   }
 
@@ -77,11 +78,14 @@ User request:
 
   const tier = parseTier(text || "");
   const model = tierToModel(tier);
-  console.info("[auto] classifier", {
-    tier,
-    model,
-    ms: Date.now() - t0,
-    raw: (text || "").slice(0, 200),
-  });
+  logger.info(
+    {
+      tier,
+      model,
+      ms: Date.now() - t0,
+      rawPreview: (text || "").slice(0, 200),
+    },
+    "auto classifier result"
+  );
   return { model, tier };
 }

@@ -272,3 +272,22 @@ button.small.primary {
   color: #7d8699;
   font-size: 0.8rem;
 }
+
+button.live-speech {
+  border-color: #4a5a8a;
+}
+
+button.live-speech.on {
+  background: #2a3f6e;
+  border-color: #5a7fd0;
+  color: #e8eaed;
+}
+
+.msg.voice-interim {
+  opacity: 0.85;
+  border-style: dashed;
+}
+
+.voice-hint {
+  font-size: 0.82rem;
+}

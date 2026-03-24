@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useChat } from "@ai-sdk/react";
+import { useLiveVoice } from "./liveVoice/useLiveVoice";
 import "./App.css";
 
 const LS_PROFILE = "helper-active-profile";
@@ -55,13 +56,15 @@ export default function App() {
     enabled: true,
   });
   const [testResult, setTestResult] = useState<string | null>(null);
+  const [liveSpeech, setLiveSpeech] = useState(false);
+  const [voiceInterim, setVoiceInterim] = useState<string | null>(null);
 
   const activeProfile = useMemo(
     () => profiles.find((p) => p.id === activeProfileId) ?? profiles[0] ?? null,
     [profiles, activeProfileId]
   );
 
-  const { messages, input, handleInputChange, handleSubmit, status, error, stop, setMessages } =
+  const { messages, input, handleInputChange, handleSubmit, status, error, stop, setMessages, append } =
     useChat({
       api: "/api/chat",
       body: {
@@ -69,6 +72,15 @@ export default function App() {
         profileId: activeProfile?.id,
       },
     });
+
+  const { liveState, voiceError: liveVoiceError, sttReady, ttsReady } = useLiveVoice({
+    enabled: liveSpeech,
+    append,
+    chatBody: { model: modelChoice, profileId: activeProfile?.id },
+    messages,
+    status,
+    onInterimChange: setVoiceInterim,
+  });
 
   const loadModels = useCallback(async () => {
     try {
@@ -247,17 +259,49 @@ export default function App() {
           <button type="button" className="small" onClick={() => setMessages([])}>
             New chat
           </button>
+          <button
+            type="button"
+            className={liveSpeech ? "small live-speech on" : "small live-speech"}
+            onClick={() => setLiveSpeech((v) => !v)}
+            title="Local Russian voice: Vosk + Piper (see .env.example)"
+          >
+            {liveSpeech ? "Живой диалог · вкл" : "Живой диалог"}
+          </button>
         </header>
         {error && (
           <div className="error-banner">{error.message || String(error)}</div>
         )}
+        {liveSpeech && liveVoiceError && (
+          <div className="error-banner voice-hint">{liveVoiceError}</div>
+        )}
         <div className="status">
-          {busy ? "Thinking…" : "Ready"}
-          {modelChoice === "auto" && !busy && (
+          {liveSpeech ? (
+            <>
+              Voice: {liveState === "idle" && "…"}
+              {liveState === "listening" && "listening"}
+              {liveState === "thinking" && "thinking…"}
+              {liveState === "speaking" && "speaking…"}
+              <span className="muted">
+                {" "}
+                · STT {sttReady ? "ok" : "off"} · TTS {ttsReady ? "ok" : "off"}
+              </span>
+            </>
+          ) : busy ? (
+            "Thinking…"
+          ) : (
+            "Ready"
+          )}
+          {!liveSpeech && modelChoice === "auto" && !busy && (
             <span className="muted"> — auto picks tier via small classifier</span>
           )}
         </div>
         <div className="messages">
+          {liveSpeech && voiceInterim && (
+            <div className="msg user voice-interim">
+              <div className="msg-role">you (voice)</div>
+              <div>{voiceInterim}</div>
+            </div>
+          )}
           {messages.map((m) => (
             <div key={m.id} className={`msg ${m.role}`}>
               <div className="msg-role">{m.role}</div>

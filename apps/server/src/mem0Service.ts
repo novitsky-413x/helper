@@ -1,48 +1,59 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Memory } from "mem0ai/oss";
-import type { Message as Mem0Message } from "mem0ai/oss";
+import type { Memory as Mem0Memory, Message as Mem0Message } from "mem0ai/oss";
 import { config } from "./config.js";
+import { logger } from "./logger.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-let memory: Memory | null = null;
+let memory: Mem0Memory | null = null;
+let initPromise: Promise<Mem0Memory | null> | null = null;
 
-function getMemory(): Memory | null {
+/** Dynamic import avoids loading `mem0ai` (and optional pgvector paths) until memory is used. */
+async function getMemory(): Promise<Mem0Memory | null> {
   if (!config.togetherApiKey) return null;
-  if (!memory) {
-    memory = new Memory({
-      version: "v1.1",
-      historyDbPath: config.mem0HistoryDb,
-      embedder: {
-        provider: "openai",
-        config: {
-          apiKey: config.togetherApiKey,
-          model: config.mem0EmbeddingModel,
-          baseURL: "https://api.together.xyz/v1",
-          embeddingDims: config.mem0EmbeddingDims,
+  if (memory) return memory;
+  if (!initPromise) {
+    initPromise = (async () => {
+      const { Memory } = await import("mem0ai/oss");
+      memory = new Memory({
+        version: "v1.1",
+        historyDbPath: config.mem0HistoryDb,
+        embedder: {
+          provider: "openai",
+          config: {
+            apiKey: config.togetherApiKey,
+            model: config.mem0EmbeddingModel,
+            baseURL: "https://api.together.xyz/v1",
+            embeddingDims: config.mem0EmbeddingDims,
+          },
         },
-      },
-      vectorStore: {
-        provider: "memory",
-        config: {
-          collectionName: "helper_memories",
-          dimension: config.mem0EmbeddingDims,
+        vectorStore: {
+          provider: "memory",
+          config: {
+            collectionName: "helper_memories",
+            dimension: config.mem0EmbeddingDims,
+          },
         },
-      },
-      llm: {
-        provider: "openai",
-        config: {
-          apiKey: config.togetherApiKey,
-          model: config.mem0LlmModel,
-          baseURL: "https://api.together.xyz/v1",
+        llm: {
+          provider: "openai",
+          config: {
+            apiKey: config.togetherApiKey,
+            model: config.mem0LlmModel,
+            baseURL: "https://api.together.xyz/v1",
+          },
         },
-      },
-      customPrompt:
-        "You extract durable facts and preferences about the user for long-term memory. Ignore transient trivia.",
+        customPrompt:
+          "You extract durable facts and preferences about the user for long-term memory. Ignore transient trivia.",
+      });
+      return memory;
+    })().catch((e) => {
+      initPromise = null;
+      logger.error({ err: e }, "failed to load mem0ai/oss Memory");
+      throw e;
     });
   }
-  return memory;
+  return initPromise;
 }
 
 export function isMemoryAvailable(): boolean {
@@ -54,7 +65,7 @@ export async function searchMemoryForUser(
   userId: string,
   limit = 12
 ): Promise<{ id: string; memory: string; score?: number }[]> {
-  const m = getMemory();
+  const m = await getMemory();
   if (!m) return [];
   const res = await m.search(query, { userId, limit });
   return res.results.map((r) => ({
@@ -77,7 +88,7 @@ export async function addConversationToMemory(
   userContent: string,
   assistantContent: string
 ) {
-  const m = getMemory();
+  const m = await getMemory();
   if (!m) return;
   const messages: Mem0Message[] = [
     { role: "user", content: userContent },
@@ -91,7 +102,7 @@ export async function memoryGetAll(
   userId: string,
   limit = 200
 ): Promise<{ id: string; text: string; createdAt: string; updatedAt: string }[]> {
-  const m = getMemory();
+  const m = await getMemory();
   if (!m) return [];
   const r = await m.getAll({ userId, limit });
   return r.results.map((item) => ({
@@ -103,19 +114,19 @@ export async function memoryGetAll(
 }
 
 export async function memoryUpdate(memoryId: string, text: string) {
-  const m = getMemory();
+  const m = await getMemory();
   if (!m) throw new Error("Memory unavailable");
   await m.update(memoryId, text);
 }
 
 export async function memoryDelete(memoryId: string) {
-  const m = getMemory();
+  const m = await getMemory();
   if (!m) throw new Error("Memory unavailable");
   await m.delete(memoryId);
 }
 
 export async function memoryDeleteAllForUser(userId: string) {
-  const m = getMemory();
+  const m = await getMemory();
   if (!m) return;
   await m.deleteAll({ userId });
 }
