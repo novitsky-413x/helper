@@ -8,11 +8,16 @@
     "apps/*"
   ],
   "scripts": {
-    "dev": "concurrently -n server,web -c blue,green \"npm run dev -w apps/server\" \"npm run dev -w apps/web\"",
+    "dev": "concurrently -k -n server,web -c blue,green \"npm run dev -w apps/server\" \"wait-on tcp:3001 && npm run dev -w apps/web\"",
     "build": "npm run build -w apps/server && npm run build -w apps/web",
-    "start": "npm run start -w apps/server"
+    "start": "npm run start -w apps/server",
+    "postinstall": "npm rebuild better-sqlite3"
   },
   "devDependencies": {
-    "concurrently": "^9.1.2"
+    "concurrently": "^9.1.2",
+    "wait-on": "^9.0.4"
+  },
+  "dependencies": {
+    "pg": "^8.20.0"
   }
 }

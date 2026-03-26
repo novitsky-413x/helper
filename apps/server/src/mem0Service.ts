@@ -8,10 +8,35 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 let memory: Mem0Memory | null = null;
 let initPromise: Promise<Mem0Memory | null> | null = null;
+let memoryDisabled = false;
+let pgCompatChecked = false;
+
+async function ensurePgCompatForMem0(): Promise<boolean> {
+  if (pgCompatChecked) return !memoryDisabled;
+  pgCompatChecked = true;
+  try {
+    const pg = (await import("pg")) as Record<string, unknown>;
+    // mem0ai/oss currently imports `Client` and `Pool` as named ESM exports from `pg`.
+    if (!("Client" in pg) || !("Pool" in pg)) {
+      memoryDisabled = true;
+      logger.warn(
+        "memory disabled: installed `pg` package does not expose ESM named exports Client/Pool required by mem0ai/oss"
+      );
+      return false;
+    }
+    return true;
+  } catch (e) {
+    memoryDisabled = true;
+    logger.warn({ err: e }, "memory disabled: failed to verify `pg` compatibility");
+    return false;
+  }
+}
 
 /** Dynamic import avoids loading `mem0ai` (and optional pgvector paths) until memory is used. */
 async function getMemory(): Promise<Mem0Memory | null> {
   if (!config.togetherApiKey) return null;
+  if (memoryDisabled) return null;
+  if (!(await ensurePgCompatForMem0())) return null;
   if (memory) return memory;
   if (!initPromise) {
     initPromise = (async () => {
@@ -50,14 +75,15 @@ async function getMemory(): Promise<Mem0Memory | null> {
     })().catch((e) => {
       initPromise = null;
       logger.error({ err: e }, "failed to load mem0ai/oss Memory");
-      throw e;
+      memoryDisabled = true;
+      return null;
     });
   }
   return initPromise;
 }
 
 export function isMemoryAvailable(): boolean {
-  return !!config.togetherApiKey;
+  return !!config.togetherApiKey && !memoryDisabled;
 }
 
 export async function searchMemoryForUser(
@@ -94,7 +120,18 @@ export async function addConversationToMemory(
     { role: "user", content: userContent },
     { role: "assistant", content: assistantContent },
   ];
-  await m.add(messages, { userId, infer: true });
+  try {
+    await m.add(messages, { userId, infer: true });
+    return;
+  } catch (e) {
+    // mem0ai/oss@2.4.2 currently throws `text.replace is not a function`
+    // with infer=true in some provider flows. Fall back to explicit write.
+    logger.warn({ err: e, userId }, "mem0 infer add failed, using fallback write");
+  }
+
+  const fallback = `User: ${userContent.trim()}\nAssistant: ${assistantContent.trim()}`;
+  if (!fallback.trim()) return;
+  await m.add(fallback, { userId, infer: false });
 }
 
 /** Shape expected by `index.ts` when listing all memories for a profile */

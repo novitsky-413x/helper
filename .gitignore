@@ -5,4 +5,5 @@ dist
 apps/server/data/*.json
 !apps/server/data/.gitkeep
 apps/server/data/*.db
+apps/server/models/
 .DS_Store
