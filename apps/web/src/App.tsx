@@ -1,250 +1,42 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { useLiveVoice } from "./liveVoice/useLiveVoice.ts";
+import { UI_TEXT, type UiLang } from "./i18n/uiText";
+import { useBackendData } from "./hooks/useBackendData";
+import { MemoryModal } from "./components/MemoryModal";
+import { McpModal } from "./components/McpModal";
+import { SettingsModal } from "./components/SettingsModal";
+import { ChatMessages, collectReasoning } from "./components/ChatMessages";
+import { AnalyticsPanel } from "./components/AnalyticsPanel";
+import type { TaskCategory } from "./types/appTypes";
+import { formatPricePerMillion, useAnalyticsMetrics } from "./hooks/useAnalyticsMetrics";
 import "./App.css";
 
-const LS_PROFILE = "helper-active-profile";
 const LS_UI_LANG = "helper-ui-lang";
 const LS_PROFILE_VOICE_MAP = "helper-profile-voice-map";
 const LS_PROFILE_CHATS = "helper-profile-chats";
 
-type UiLang = "ru" | "en";
 type TtsVoice = string;
 
-const UI_TEXT: Record<
-  UiLang,
-  {
-    model: string;
-    memoryProfile: string;
-    settings: string;
-    uiLanguage: string;
-    ttsVoice: string;
-    ttsVoiceHint: string;
-    thinkingInline: string;
-    thinkingDetails: string;
-    close: string;
-    liveOff: string;
-    liveOn: string;
-    voiceOutputOn: string;
-    voiceOutputOff: string;
-    recordStart: string;
-    recordStop: string;
-    voiceLabel: string;
-    listening: string;
-    thinking: string;
-    speaking: string;
-    ready: string;
-    messagePlaceholder: string;
-    send: string;
-    stop: string;
-    contextAnalytics: string;
-    contextAnalyticsOpen: string;
-    contextAnalyticsClose: string;
-    estContextUsed: string;
-    estContextLimit: string;
-    estContextLeft: string;
-    contextRisk: string;
-    resolvedModel: string;
-    selectedModel: string;
-    modelUsageSession: string;
-    lastRequestUsage: string;
-    promptTokens: string;
-    completionTokens: string;
-    totalTokens: string;
-    memoryInjected: string;
-    memoryHits: string;
-    mem0Usage: string;
-    mem0Rows: string;
-    mem0Chars: string;
-    mem0ApproxTokens: string;
-    mem0Note: string;
-    analyticsProfileOwner: string;
-    analyticsProfileStatus: string;
-    analyticsProfileStatusCurrent: string;
-    analyticsProfileStatusStale: string;
-    analyticsWarningHigh: string;
-    analyticsWarningMedium: string;
-    analyticsWarningLow: string;
-    analyticsEstimateNote: string;
-    memoryTab: string;
-    mcpTab: string;
-  }
-> = {
-  ru: {
-    model: "Модель",
-    memoryProfile: "Профиль памяти",
-    settings: "Настройки",
-    uiLanguage: "Язык интерфейса",
-    ttsVoice: "Голос ассистента",
-    ttsVoiceHint: "Качественные офлайн-голоса (RU, живее и естественнее)",
-    thinkingInline: "Размышляет...",
-    thinkingDetails: "Ход рассуждений",
-    close: "Закрыть",
-    liveOff: "Голосовой чат",
-    liveOn: "Голосовой чат · вкл",
-    voiceOutputOn: "Голос: вкл",
-    voiceOutputOff: "Голос: выкл",
-    recordStart: "Начать запись",
-    recordStop: "Остановить запись",
-    voiceLabel: "Голос",
-    listening: "слушает",
-    thinking: "думает...",
-    speaking: "говорит...",
-    ready: "Готово",
-    messagePlaceholder: "Сообщение...",
-    send: "Отправить",
-    stop: "Стоп",
-    contextAnalytics: "Аналитика контекста",
-    contextAnalyticsOpen: "Показать аналитику",
-    contextAnalyticsClose: "Скрыть аналитику",
-    estContextUsed: "Оценка занято",
-    estContextLimit: "Лимит модели",
-    estContextLeft: "Осталось до лимита",
-    contextRisk: "Риск упереться в лимит",
-    resolvedModel: "Фактическая модель",
-    selectedModel: "Выбранная модель",
-    modelUsageSession: "Модели в текущей сессии",
-    lastRequestUsage: "Последний запрос (точно)",
-    promptTokens: "Prompt tokens",
-    completionTokens: "Completion tokens",
-    totalTokens: "Total tokens",
-    memoryInjected: "Инжектировано памяти (симв.)",
-    memoryHits: "Попало записей mem0",
-    mem0Usage: "Использование mem0 (профиль)",
-    mem0Rows: "Записей",
-    mem0Chars: "Символов",
-    mem0ApproxTokens: "Оценка токенов",
-    mem0Note:
-      "mem0 хранится отдельно и почти не ограничен по объему, но в контекст попадает лишь небольшая выборка.",
-    analyticsProfileOwner: "Владелец данных",
-    analyticsProfileStatus: "Статус данных",
-    analyticsProfileStatusCurrent: "Текущий профиль",
-    analyticsProfileStatusStale: "Не совпадает с выбранным профилем",
-    analyticsWarningHigh: "Высокий",
-    analyticsWarningMedium: "Средний",
-    analyticsWarningLow: "Низкий",
-    analyticsEstimateNote: "Все значения по токенам оценочные.",
-    memoryTab: "Память",
-    mcpTab: "MCP",
-  },
-  en: {
-    model: "Model",
-    memoryProfile: "Memory profile",
-    settings: "Settings",
-    uiLanguage: "Interface language",
-    ttsVoice: "Assistant voice",
-    ttsVoiceHint: "High-quality offline voices (RU, more natural and lively)",
-    thinkingInline: "Thinking...",
-    thinkingDetails: "Reasoning",
-    close: "Close",
-    liveOff: "Voice chat",
-    liveOn: "Voice chat · on",
-    voiceOutputOn: "Voice output: on",
-    voiceOutputOff: "Voice output: off",
-    recordStart: "Start recording",
-    recordStop: "Stop recording",
-    voiceLabel: "Voice",
-    listening: "listening",
-    thinking: "thinking...",
-    speaking: "speaking...",
-    ready: "Ready",
-    messagePlaceholder: "Message...",
-    send: "Send",
-    stop: "Stop",
-    contextAnalytics: "Context analytics",
-    contextAnalyticsOpen: "Show analytics",
-    contextAnalyticsClose: "Hide analytics",
-    estContextUsed: "Estimated used",
-    estContextLimit: "Model limit",
-    estContextLeft: "Remaining to limit",
-    contextRisk: "Context overflow risk",
-    resolvedModel: "Resolved model",
-    selectedModel: "Selected model",
-    modelUsageSession: "Models used in this session",
-    lastRequestUsage: "Last request (exact)",
-    promptTokens: "Prompt tokens",
-    completionTokens: "Completion tokens",
-    totalTokens: "Total tokens",
-    memoryInjected: "Injected memory (chars)",
-    memoryHits: "Injected mem0 entries",
-    mem0Usage: "mem0 usage (profile)",
-    mem0Rows: "Entries",
-    mem0Chars: "Chars",
-    mem0ApproxTokens: "Approx tokens",
-    mem0Note:
-      "mem0 is stored outside model context and is practically unbounded, but only a small subset is injected per request.",
-    analyticsProfileOwner: "Data owner",
-    analyticsProfileStatus: "Data status",
-    analyticsProfileStatusCurrent: "Current profile",
-    analyticsProfileStatusStale: "Does not match selected profile",
-    analyticsWarningHigh: "High",
-    analyticsWarningMedium: "Medium",
-    analyticsWarningLow: "Low",
-    analyticsEstimateNote: "Token metrics are approximate.",
-    memoryTab: "Memory",
-    mcpTab: "MCP",
-  },
-};
-
-type Profile = {
-  id: string;
-  name: string;
-  mem0UserId: string;
-};
-
-type TogetherModel = {
-  id: string;
-  display_name?: string | null;
-};
-
-type McpServer = {
-  id: string;
-  name: string;
-  enabled: boolean;
-  transport: "http" | "stdio";
-  url?: string;
-  command?: string;
-  args?: string[];
-};
-
-type MemoryRow = { id: string; memory: string; score?: number };
-type UsageSnapshot = {
-  ts: string;
-  resolvedModel: string;
-  tier?: string;
-  profileId: string | null;
-  messageCount: number;
-  lastUserChars: number;
-  memoryHits: number;
-  memoryBlockChars: number;
-  promptTokens: number | null;
-  completionTokens: number | null;
-  totalTokens: number | null;
-};
-const DEFAULT_CONTEXT_WINDOW = 8192;
-const MODEL_CONTEXT_HINTS: Array<{ re: RegExp; tokens: number }> = [
-  { re: /gpt-4\.1|gpt-4o|o4|o3/i, tokens: 128000 },
-  { re: /gpt-oss-20b/i, tokens: 32768 },
-  { re: /gemma-3n/i, tokens: 32768 },
-  { re: /qwen3|qwen2\.5|qwen/i, tokens: 32768 },
-  { re: /llama-3\.3|llama-3\.1/i, tokens: 131072 },
-  { re: /mistral|mixtral/i, tokens: 32768 },
+const TASK_CATEGORIES: TaskCategory[] = [
+  "primary",
+  "code_mcp",
+  "reasoning",
+  "vision",
+  "image_gen",
+  "audio",
+  "memory",
 ];
 
-function estimateTokens(text: string): number {
-  const trimmed = text.trim();
-  if (!trimmed) return 0;
-  return Math.ceil(trimmed.length / 4);
-}
-
-function estimateModelContextWindow(modelId: string | undefined): number {
-  if (!modelId) return DEFAULT_CONTEXT_WINDOW;
-  const hit = MODEL_CONTEXT_HINTS.find((x) => x.re.test(modelId));
-  return hit?.tokens ?? DEFAULT_CONTEXT_WINDOW;
-}
-
+const CATEGORY_I18N_KEY: Record<TaskCategory, keyof (typeof UI_TEXT)["ru"]> = {
+  primary: "categoryPrimary",
+  code_mcp: "categoryCodeMcp",
+  reasoning: "categoryReasoning",
+  vision: "categoryVision",
+  image_gen: "categoryImageGen",
+  audio: "categoryAudio",
+  memory: "categoryMemory",
+};
 function prettyNum(value: number): string {
   return new Intl.NumberFormat().format(Math.max(0, Math.round(value)));
 }
@@ -291,69 +83,64 @@ function stripAgentArtifacts(text: string): string {
   return out;
 }
 
-function partText(part: Record<string, unknown>): string {
-  const candidates = [part.text, part.reasoning, part.content, part.value];
-  for (const v of candidates) {
-    if (typeof v === "string" && v.trim()) return v;
-  }
-  return "";
-}
-
-function collectReasoning(parts: Array<Record<string, unknown>> | null): string {
-  if (!parts) return "";
-  return parts
-    .filter((p) => String(p.type || "") === "reasoning")
-    .map((p) => partText(p))
-    .filter(Boolean)
-    .join("\n");
-}
-
-function MessageMarkdown({ text }: { text: string }) {
-  const cleaned = stripAgentArtifacts(text);
-  if (!cleaned) return null;
-  return (
-    <div className="msg-markdown">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{cleaned}</ReactMarkdown>
-    </div>
-  );
-}
-const MemoMessageMarkdown = memo(MessageMarkdown);
-
 export default function App() {
-  const [models, setModels] = useState<TogetherModel[]>([]);
-  const [modelChoice, setModelChoice] = useState<string>("auto");
-  const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [profilesLoaded, setProfilesLoaded] = useState(false);
-  const [activeProfileId, setActiveProfileId] = useState<string | null>(null);
-  const [memoryRows, setMemoryRows] = useState<MemoryRow[]>([]);
-  const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
-  const [newProfileName, setNewProfileName] = useState("");
-  const [mcpForm, setMcpForm] = useState({
-    name: "",
-    transport: "http" as "http" | "stdio",
-    url: "",
-    command: "",
-    args: "",
-    enabled: true,
+  const [uiLang, setUiLang] = useState<UiLang>(() => {
+    const stored = localStorage.getItem(LS_UI_LANG);
+    return stored === "ru" || stored === "en" ? stored : "ru";
   });
-  const [testResult, setTestResult] = useState<string | null>(null);
+  const tx = UI_TEXT[uiLang];
+  const {
+    models,
+    modelCatalog,
+    modelsLoading,
+    profiles,
+    profilesLoaded,
+    activeProfileId,
+    activeProfile,
+    memoryRows,
+    memoryLoading,
+    mcpServers,
+    newProfileName,
+    setNewProfileName,
+    mcpForm,
+    setMcpForm,
+    testResult,
+    lastUsage,
+    usageLoading,
+    usageLoadedForProfileId,
+    setLastUsage,
+    onProfileChange,
+    loadMemory,
+    loadUsage,
+    addProfile,
+    renameProfile,
+    moveCategoryModel,
+    saveMemoryPolicy,
+    removeProfile,
+    saveMemory,
+    removeMemory,
+    saveMcp,
+    testMcp,
+    deleteMcp,
+  } = useBackendData({
+    profileDeleteConfirm: tx.profileDeleteConfirm,
+    memoryDeleteConfirm: tx.memoryDeleteConfirm,
+    mcpDeleteConfirm: tx.mcpDeleteConfirm,
+  });
+
+  const [modelChoice, setModelChoice] = useState<string>("auto");
   const [liveSpeech, setLiveSpeech] = useState(false);
   const [recordingEnabled, setRecordingEnabled] = useState(false);
   const [ttsOutputEnabled, setTtsOutputEnabled] = useState(true);
   const [browserVoices, setBrowserVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [voiceInterim, setVoiceInterim] = useState<string | null>(null);
-  const [uiLang, setUiLang] = useState<UiLang>(() => {
-    const stored = localStorage.getItem(LS_UI_LANG);
-    return stored === "ru" || stored === "en" ? stored : "ru";
-  });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [memoriesOpen, setMemoriesOpen] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
   const [analyticsOpen, setAnalyticsOpen] = useState(false);
   const [resolvedModelId, setResolvedModelId] = useState<string | null>(null);
-  const [resolvedTier, setResolvedTier] = useState<string | null>(null);
+  const [resolvedBaseModel, setResolvedBaseModel] = useState<string | null>(null);
   const [usedModels, setUsedModels] = useState<string[]>([]);
-  const [lastUsage, setLastUsage] = useState<UsageSnapshot | null>(null);
   const usedModelsByProfileRef = useRef<Record<string, string[]>>({});
   const [profileVoiceMap, setProfileVoiceMap] = useState<Record<string, TtsVoice>>(() => {
     try {
@@ -368,15 +155,23 @@ export default function App() {
     }
   });
   const [reasoningByMessageId, setReasoningByMessageId] = useState<Record<string, string>>({});
-
-  const activeProfile = useMemo(
-    () => profiles.find((p) => p.id === activeProfileId) ?? profiles[0] ?? null,
-    [profiles, activeProfileId]
-  );
+  const [memoryTopKDraft, setMemoryTopKDraft] = useState<number>(10);
+  const [memoryMaxCharsDraft, setMemoryMaxCharsDraft] = useState<number>(3500);
+  const [pendingImageDataUrl, setPendingImageDataUrl] = useState<string>("");
+  const [pendingImageName, setPendingImageName] = useState<string>("");
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
 
   const activeBrowserVoiceUri: string = activeProfile?.id ? profileVoiceMap[activeProfile.id] ?? "" : "";
 
-  const { messages, input, handleInputChange, handleSubmit, status, error, stop, setMessages, append } =
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setMemoryTopKDraft(activeProfile?.memoryPolicy?.topK ?? 10);
+      setMemoryMaxCharsDraft(activeProfile?.memoryPolicy?.maxChars ?? 3500);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [activeProfile?.id, activeProfile?.memoryPolicy]);
+
+  const { messages, input, setInput, handleInputChange, handleSubmit, status, error, stop, setMessages, append } =
     useChat({
       api: "/api/chat",
       body: {
@@ -385,7 +180,7 @@ export default function App() {
       },
       onResponse: (response) => {
         const resolved = response.headers.get("x-helper-resolved-model");
-        const tier = response.headers.get("x-helper-tier");
+        const baseModel = response.headers.get("x-helper-base-model");
         if (resolved) {
           setResolvedModelId(resolved);
           setUsedModels((prev) => {
@@ -396,7 +191,7 @@ export default function App() {
             return next;
           });
         }
-        if (tier) setResolvedTier(tier);
+        if (baseModel) setResolvedBaseModel(baseModel);
       },
     });
   const busy = status === "submitted" || status === "streaming";
@@ -413,57 +208,6 @@ export default function App() {
     onInterimChange: setVoiceInterim,
   });
 
-  const loadModels = useCallback(async () => {
-    try {
-      const r = await fetch("/api/models");
-      if (!r.ok) return;
-      const j = (await r.json()) as { models?: TogetherModel[] };
-      if (j.models) setModels(j.models);
-    } catch {
-      /* ignore */
-    }
-  }, []);
-
-  const loadProfiles = useCallback(async () => {
-    const r = await fetch("/api/profiles");
-    if (!r.ok) return;
-    const j = (await r.json()) as { profiles: Profile[] };
-    const list = j.profiles;
-    setProfiles(list);
-    const fromLs = localStorage.getItem(LS_PROFILE);
-    if (fromLs && list.some((p) => p.id === fromLs)) {
-      setActiveProfileId(fromLs);
-    } else if (list[0]) {
-      setActiveProfileId(list[0].id);
-      localStorage.setItem(LS_PROFILE, list[0].id);
-    }
-    setProfilesLoaded(true);
-  }, []);
-
-  const loadMemory = useCallback(async () => {
-    if (!activeProfile) return;
-    const r = await fetch(
-      `/api/memory?userId=${encodeURIComponent(activeProfile.mem0UserId)}`
-    );
-    if (!r.ok) return;
-    const j = (await r.json()) as { results?: MemoryRow[] };
-    setMemoryRows(j.results ?? []);
-  }, [activeProfile]);
-
-  const loadMcp = useCallback(async () => {
-    const r = await fetch("/api/mcp/servers");
-    if (!r.ok) return;
-    const j = (await r.json()) as { servers?: McpServer[] };
-    setMcpServers(j.servers ?? []);
-  }, []);
-
-  const loadUsage = useCallback(async () => {
-    const query = activeProfileId ? `?profileId=${encodeURIComponent(activeProfileId)}` : "";
-    const r = await fetch(`/api/chat/usage${query}`);
-    if (!r.ok) return;
-    const j = (await r.json()) as { usage?: UsageSnapshot | null };
-    setLastUsage(j.usage ?? null);
-  }, [activeProfileId]);
 
   useEffect(() => {
     localStorage.setItem(LS_UI_LANG, uiLang);
@@ -499,29 +243,6 @@ export default function App() {
     }, 0);
     return () => window.clearTimeout(timer);
   }, [activeProfile?.id, profileVoiceMap, browserVoices]);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void loadModels();
-      void loadProfiles();
-      void loadMcp();
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [loadModels, loadProfiles, loadMcp]);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void loadMemory();
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [loadMemory, activeProfile?.id]);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void loadUsage();
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [loadUsage, activeProfile?.id]);
 
   useEffect(() => {
     if (busy) return;
@@ -587,7 +308,7 @@ export default function App() {
       timer = window.setTimeout(() => {
         setLastUsage(null);
         setResolvedModelId(null);
-        setResolvedTier(null);
+        setResolvedBaseModel(null);
         setUsedModels(usedModelsByProfileRef.current[nextId] ?? []);
       }, 0);
     }
@@ -595,7 +316,7 @@ export default function App() {
     return () => {
       if (timer !== null) window.clearTimeout(timer);
     };
-  }, [activeProfile?.id, messages, setMessages]);
+  }, [activeProfile?.id, messages, setLastUsage, setMessages]);
 
   useEffect(() => {
     if (!activeProfileId) return;
@@ -603,7 +324,7 @@ export default function App() {
     if (lastUsage.profileId !== activeProfileId) return;
     const timer = window.setTimeout(() => {
       setResolvedModelId(lastUsage.resolvedModel ?? null);
-      setResolvedTier(lastUsage.tier ?? null);
+      setResolvedBaseModel(null);
       setUsedModels((prev) => {
         const next = lastUsage.resolvedModel
           ? prev.includes(lastUsage.resolvedModel)
@@ -615,7 +336,7 @@ export default function App() {
       });
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [lastUsage, activeProfileId]);
+  }, [lastUsage, activeProfileId, setLastUsage]);
 
   useEffect(() => {
     if (!profilesLoaded) return;
@@ -639,136 +360,60 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [profiles, profilesLoaded]);
 
-  const onProfileChange = (id: string) => {
-    setActiveProfileId(id);
-    localStorage.setItem(LS_PROFILE, id);
-  };
-
-  const addProfile = async () => {
-    const name = newProfileName.trim() || "Profile";
-    const r = await fetch("/api/profiles", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
-    });
-    const p = await r.json();
-    setNewProfileName("");
-    await loadProfiles();
-    onProfileChange(p.id);
-  };
-
-  const renameProfile = async (id: string, name: string) => {
-    await fetch(`/api/profiles/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
-    });
-    await loadProfiles();
-  };
-
-  const removeProfile = async (id: string) => {
-    if (!confirm("Delete this profile and its stored memories?")) return;
-    await fetch(`/api/profiles/${id}`, { method: "DELETE" });
-    delete profileChatsRef.current[id];
-    localStorage.setItem(LS_PROFILE_CHATS, JSON.stringify(profileChatsRef.current));
-    setProfileVoiceMap((prev) => {
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
-    await loadProfiles();
-    const next = profiles.find((p) => p.id !== id);
-    if (next) onProfileChange(next.id);
-  };
-
-  const saveMemory = async (id: string, text: string) => {
-    await fetch(`/api/memory/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    });
-    await loadMemory();
-  };
-
-  const removeMemory = async (id: string) => {
-    if (!confirm("Delete this memory?")) return;
-    await fetch(`/api/memory/${id}`, { method: "DELETE" });
-    await loadMemory();
-  };
-
-  const saveMcp = async () => {
-    const args = mcpForm.args
-      .split(/\s+/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-    await fetch("/api/mcp/servers", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: mcpForm.name.trim() || "MCP",
-        enabled: mcpForm.enabled,
-        transport: mcpForm.transport,
-        url: mcpForm.transport === "http" ? mcpForm.url.trim() : undefined,
-        command: mcpForm.transport === "stdio" ? mcpForm.command.trim() : undefined,
-        args: mcpForm.transport === "stdio" ? args : undefined,
-      }),
-    });
-    setMcpForm({ name: "", transport: mcpForm.transport, url: "", command: "", args: "", enabled: true });
-    await loadMcp();
-  };
-
-  const testMcp = async (id: string) => {
-    setTestResult(null);
-    const r = await fetch(`/api/mcp/servers/${id}/test`, { method: "POST" });
-    const j = await r.json();
-    setTestResult(JSON.stringify(j, null, 2));
-  };
-
-  const deleteMcp = async (id: string) => {
-    if (!confirm("Remove this MCP server?")) return;
-    await fetch(`/api/mcp/servers/${id}`, { method: "DELETE" });
-    await loadMcp();
-    setTestResult(null);
-  };
-
-  const tx = UI_TEXT[uiLang];
   const selectedModelLabel = modelChoice === "auto" ? "auto" : modelChoice;
-  const effectiveModelId = resolvedModelId ?? (modelChoice !== "auto" ? modelChoice : undefined);
-  const contextWindow = estimateModelContextWindow(effectiveModelId);
-  const messagesTokenEstimate = useMemo(
-    () =>
-      messages.reduce((sum, m) => {
-        const roleOverhead = 8;
-        return sum + roleOverhead + estimateTokens(messageText(m));
-      }, 0),
-    [messages]
-  );
-  const mem0Chars = useMemo(() => memoryRows.reduce((sum, row) => sum + (row.memory?.length ?? 0), 0), [memoryRows]);
-  const mem0TokensApprox = useMemo(() => Math.ceil(mem0Chars / 4), [mem0Chars]);
-  const mem0InjectedApprox = useMemo(() => {
-    if (!memoryRows.length) return 0;
-    const avgRowTokens = Math.max(1, Math.ceil(mem0TokensApprox / memoryRows.length));
-    return Math.min(12, memoryRows.length) * avgRowTokens + 60;
-  }, [memoryRows.length, mem0TokensApprox]);
-  const systemAndToolsOverhead = 220;
-  const precisePromptTokens = lastUsage?.promptTokens ?? null;
-  const totalContextUsed =
-    precisePromptTokens !== null ? precisePromptTokens : messagesTokenEstimate + mem0InjectedApprox + systemAndToolsOverhead;
-  const totalContextLeft = Math.max(0, contextWindow - totalContextUsed);
-  const fillRatio = contextWindow ? totalContextUsed / contextWindow : 0;
-  const riskLevel =
-    fillRatio >= 0.82 ? tx.analyticsWarningHigh : fillRatio >= 0.62 ? tx.analyticsWarningMedium : tx.analyticsWarningLow;
-  const usageOwnerProfile =
-    (lastUsage?.profileId && profiles.find((p) => p.id === lastUsage.profileId)) ?? null;
-  const usageOwnerLabel = usageOwnerProfile
-    ? `${usageOwnerProfile.name} (${usageOwnerProfile.id.slice(0, 8)}...)`
-    : lastUsage?.profileId
-      ? `${lastUsage.profileId.slice(0, 8)}...`
-      : "—";
-  const usageMatchesSelected = !!activeProfile?.id && lastUsage?.profileId === activeProfile.id;
-  const submitFromComposer = (e: React.FormEvent<HTMLFormElement>) => {
+  const {
+    categoryOptions,
+    contextWindow,
+    mem0Chars,
+    mem0TokensApprox,
+    mem0InjectedApprox,
+    precisePromptTokens,
+    totalContextUsed,
+    totalContextLeft,
+    riskLevel,
+    usageOwnerLabel,
+    usageStatus,
+    requestCostUsd,
+    sessionCostUsd,
+  } = useAnalyticsMetrics({
+    modelCatalog,
+    models,
+    messages: messages as Array<{ content?: string; parts?: Array<{ type: string; text?: string }> }>,
+    memoryRows,
+    modelChoice,
+    resolvedModelId,
+    lastUsage,
+    usageLoading,
+    usageLoadedForProfileId,
+    activeProfile,
+    profiles,
+    activeProfileId,
+    tx: {
+      analyticsWarningHigh: tx.analyticsWarningHigh,
+      analyticsWarningMedium: tx.analyticsWarningMedium,
+      analyticsWarningLow: tx.analyticsWarningLow,
+    },
+  });
+  const submitFromComposer = async (e: React.FormEvent<HTMLFormElement>) => {
     setVoiceInterim(null);
-    handleSubmit(e);
+    if (!pendingImageDataUrl) {
+      handleSubmit(e);
+      return;
+    }
+    e.preventDefault();
+    const text = input.trim();
+    const parts: Array<Record<string, unknown>> = [];
+    if (text) parts.push({ type: "text", text });
+    parts.push({ type: "image", image_url: pendingImageDataUrl });
+    await append({
+      role: "user",
+      content: text,
+      parts: parts as never,
+    });
+    setInput("");
+    setPendingImageDataUrl("");
+    setPendingImageName("");
+    if (imageInputRef.current) imageInputRef.current.value = "";
   };
   const setVoiceForActiveProfile = (voiceUri: string) => {
     if (!activeProfile?.id) return;
@@ -791,7 +436,7 @@ export default function App() {
               <option value="auto">Auto (cost-aware)</option>
               {models.map((m) => (
                 <option key={m.id} value={m.id}>
-                  {m.display_name || m.id}
+                  {`${m.display_name || m.id}${formatPricePerMillion(m) ? ` · ${formatPricePerMillion(m)}` : ""}`}
                 </option>
               ))}
             </select>
@@ -896,7 +541,7 @@ export default function App() {
             tx.ready
           )}
           {!liveSpeech && modelChoice === "auto" && !busy && (
-            <span className="muted"> — auto picks tier via small classifier</span>
+            <span className="muted"> — auto starts with base model and delegates when needed</span>
           )}
         </div>
         {!liveSpeech && busy && (
@@ -905,211 +550,137 @@ export default function App() {
             <span>{tx.thinkingInline}</span>
           </div>
         )}
-        <div className="messages">
-          {messages.map((m, idx) => (
-            <div key={m.id} className={`msg ${m.role}`}>
-              <div className="msg-role">{m.role}</div>
-              {m.role === "assistant" && idx === messages.length - 1 && busy && (
-                <div className="thinking-inline">{tx.thinkingInline}</div>
-              )}
-              {m.role === "assistant" &&
-                (() => {
-                  const parts = (m.parts?.length ? m.parts : null) as
-                    | Array<Record<string, unknown>>
-                    | null;
-                  const reasoning = collectReasoning(parts) || (m.id ? reasoningByMessageId[m.id] ?? "" : "");
-                  if (!reasoning) return null;
-                  const isLatestAssistant = idx === messages.length - 1;
-                  const isThinkingNow = isLatestAssistant && busy;
-                  return (
-                    <details className="reasoning-block" open={isThinkingNow}>
-                      <summary>
-                        {tx.thinkingDetails}
-                        {isThinkingNow ? ` · ${tx.thinkingInline}` : ""}
-                      </summary>
-                      <pre>{reasoning}</pre>
-                    </details>
-                  );
-                })()}
-              {(m.parts?.length ? m.parts : null)?.map((part, i) => {
-                if (part.type === "text") {
-                  const partText = stripAgentArtifacts(part.text ?? "");
-                  if (!partText) return null;
-                  const isLatestAssistant = m.role === "assistant" && idx === messages.length - 1;
-                  const isStreaming = busy && isLatestAssistant;
-                  if (isStreaming) {
-                    return (
-                      <div key={i} className="msg-plain">
-                        {partText}
-                      </div>
-                    );
-                  }
-                  return <MemoMessageMarkdown key={i} text={partText} />;
-                }
-                if (part.type === "reasoning") {
-                  return null;
-                }
-                if (part.type === "tool-invocation") {
-                  const t = part.toolInvocation as unknown as Record<string, unknown> & {
-                    toolName?: string;
-                    state?: string;
-                  };
-                  return (
-                    <div key={i} className="tool-part">
-                      <strong>{String(t.toolName ?? "?")}</strong> ({String(t.state ?? "")})
-                      <pre style={{ margin: "0.35rem 0 0" }}>{JSON.stringify(t, null, 2)}</pre>
-                    </div>
-                  );
-                }
-                return null;
-              }) ??
-                (messageText(m) ? (
-                  busy && m.role === "assistant" && idx === messages.length - 1 ? (
-                    <div className="msg-plain">{stripAgentArtifacts(messageText(m))}</div>
-                  ) : (
-                    <MemoMessageMarkdown text={stripAgentArtifacts(messageText(m))} />
-                  )
-                ) : null)}
-            </div>
-          ))}
-        </div>
+        <ChatMessages
+          messages={messages}
+          busy={busy}
+          tx={tx}
+          reasoningByMessageId={reasoningByMessageId}
+          stripAgentArtifacts={stripAgentArtifacts}
+          messageText={messageText}
+        />
         <div className="composer">
+          <input
+            ref={imageInputRef}
+            type="file"
+            accept="image/*"
+            style={{ display: "none" }}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              const reader = new FileReader();
+              reader.onload = () => {
+                if (typeof reader.result !== "string") return;
+                setPendingImageDataUrl(reader.result);
+                setPendingImageName(file.name || "image");
+              };
+              reader.readAsDataURL(file);
+            }}
+          />
+          {pendingImageDataUrl && (
+            <div className="voice-interim-inline" style={{ alignItems: "flex-start" }}>
+              <img
+                src={pendingImageDataUrl}
+                alt={pendingImageName || "pending"}
+                style={{ width: "84px", height: "84px", objectFit: "cover", borderRadius: "8px", border: "1px solid #2f3545" }}
+              />
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+                <span>{tx.imageAttached}{pendingImageName ? `: ${pendingImageName}` : ""}</span>
+                <button
+                  type="button"
+                  className="small"
+                  onClick={() => {
+                    setPendingImageDataUrl("");
+                    setPendingImageName("");
+                    if (imageInputRef.current) imageInputRef.current.value = "";
+                  }}
+                >
+                  {tx.removeImage}
+                </button>
+              </div>
+            </div>
+          )}
           {liveSpeech && recordingEnabled && voiceInterim && (
             <div className="voice-interim-inline">
               <span className="dot" aria-hidden="true" />
               <span>{voiceInterim}</span>
             </div>
           )}
-          <div className={`analytics-drawer ${analyticsOpen ? "open" : ""}`}>
-            <div className="analytics-grid">
-              <div className="analytics-card">
-                <h4>{tx.contextAnalytics}</h4>
-                <div className="analytics-row">
-                  <span>{tx.selectedModel}</span>
-                  <strong>{selectedModelLabel}</strong>
-                </div>
-                <div className="analytics-row">
-                  <span>{tx.resolvedModel}</span>
-                  <strong>{resolvedModelId ? `${resolvedModelId}${resolvedTier ? ` (${resolvedTier})` : ""}` : "—"}</strong>
-                </div>
-                <div className="analytics-row">
-                  <span>{tx.estContextUsed}</span>
-                  <strong>{precisePromptTokens !== null ? prettyNum(totalContextUsed) : `~${prettyNum(totalContextUsed)}`}</strong>
-                </div>
-                <div className="analytics-row">
-                  <span>{tx.estContextLimit}</span>
-                  <strong>{prettyNum(contextWindow)}</strong>
-                </div>
-                <div className="analytics-row">
-                  <span>{tx.estContextLeft}</span>
-                  <strong>{prettyNum(totalContextLeft)}</strong>
-                </div>
-                <div className="analytics-row">
-                  <span>{tx.contextRisk}</span>
-                  <strong>{riskLevel}</strong>
-                </div>
-              </div>
-              <div className="analytics-card">
-                <h4>{tx.lastRequestUsage}</h4>
-                <div className="analytics-row">
-                  <span>{tx.analyticsProfileOwner}</span>
-                  <strong>{usageOwnerLabel}</strong>
-                </div>
-                <div className="analytics-row">
-                  <span>{tx.analyticsProfileStatus}</span>
-                  <strong className={usageMatchesSelected ? "ok-text" : "warn-text"}>
-                    {usageMatchesSelected ? tx.analyticsProfileStatusCurrent : tx.analyticsProfileStatusStale}
-                  </strong>
-                </div>
-                <div className="analytics-row">
-                  <span>{tx.promptTokens}</span>
-                  <strong>{lastUsage?.promptTokens !== null && lastUsage?.promptTokens !== undefined ? prettyNum(lastUsage.promptTokens) : "—"}</strong>
-                </div>
-                <div className="analytics-row">
-                  <span>{tx.completionTokens}</span>
-                  <strong>{lastUsage?.completionTokens !== null && lastUsage?.completionTokens !== undefined ? prettyNum(lastUsage.completionTokens) : "—"}</strong>
-                </div>
-                <div className="analytics-row">
-                  <span>{tx.totalTokens}</span>
-                  <strong>{lastUsage?.totalTokens !== null && lastUsage?.totalTokens !== undefined ? prettyNum(lastUsage.totalTokens) : "—"}</strong>
-                </div>
-                <div className="analytics-row">
-                  <span>{tx.memoryInjected}</span>
-                  <strong>{lastUsage ? prettyNum(lastUsage.memoryBlockChars) : "—"}</strong>
-                </div>
-                <div className="analytics-row">
-                  <span>{tx.memoryHits}</span>
-                  <strong>{lastUsage ? prettyNum(lastUsage.memoryHits) : "—"}</strong>
-                </div>
-              </div>
-              <div className="analytics-card">
-                <h4>{tx.mem0Usage}</h4>
-                <div className="analytics-row">
-                  <span>{tx.mem0Rows}</span>
-                  <strong>{prettyNum(memoryRows.length)}</strong>
-                </div>
-                <div className="analytics-row">
-                  <span>{tx.mem0Chars}</span>
-                  <strong>{prettyNum(mem0Chars)}</strong>
-                </div>
-                <div className="analytics-row">
-                  <span>{tx.mem0ApproxTokens}</span>
-                  <strong>~{prettyNum(mem0TokensApprox)}</strong>
-                </div>
-                <div className="analytics-row">
-                  <span>mem0 in current prompt</span>
-                  <strong>~{prettyNum(mem0InjectedApprox)}</strong>
-                </div>
-                <p className="muted">{tx.mem0Note}</p>
-              </div>
-              <div className="analytics-card">
-                <h4>{tx.modelUsageSession}</h4>
-                {usedModels.length ? (
-                  <ul className="analytics-list">
-                    {usedModels.map((m) => (
-                      <li key={m}>{m}</li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="muted">—</p>
-                )}
-                <p className="muted">{tx.analyticsEstimateNote}</p>
-              </div>
-            </div>
-          </div>
-          <div className="analytics-toggle-row">
-            <button
-              type="button"
-              className="small"
-              onClick={() => setAnalyticsOpen((v) => !v)}
-              aria-expanded={analyticsOpen}
-            >
-              {analyticsOpen ? tx.contextAnalyticsClose : tx.contextAnalyticsOpen}
-            </button>
-          </div>
+          <AnalyticsPanel
+            analyticsOpen={analyticsOpen}
+            setAnalyticsOpen={setAnalyticsOpen}
+            tx={tx}
+            selectedModelLabel={selectedModelLabel}
+            resolvedModelId={resolvedModelId}
+            resolvedBaseModel={resolvedBaseModel}
+            precisePromptTokens={precisePromptTokens}
+            totalContextUsed={totalContextUsed}
+            contextWindow={contextWindow}
+            totalContextLeft={totalContextLeft}
+            riskLevel={riskLevel}
+            usageOwnerLabel={usageOwnerLabel}
+            usageStatus={usageStatus}
+            lastUsage={lastUsage}
+            prettyNum={prettyNum}
+            requestCostUsd={requestCostUsd}
+            memoryRowsLen={memoryRows.length}
+            mem0Chars={mem0Chars}
+            mem0TokensApprox={mem0TokensApprox}
+            mem0InjectedApprox={mem0InjectedApprox}
+            sessionCostUsd={sessionCostUsd}
+            usedModels={usedModels}
+          />
           <form
             onSubmit={submitFromComposer}
           >
-            <textarea
-              value={input}
-              onChange={handleInputChange}
-              placeholder={tx.messagePlaceholder}
-              rows={2}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  setVoiceInterim(null);
-                  handleSubmit(e);
-                }
-              }}
-            />
+            <div className="composer-input-wrap">
+              <textarea
+                value={input}
+                onChange={handleInputChange}
+                placeholder={tx.messagePlaceholder}
+                rows={2}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    setVoiceInterim(null);
+                    if (!pendingImageDataUrl) {
+                      handleSubmit(e);
+                      return;
+                    }
+                    const text = input.trim();
+                    const parts: Array<Record<string, unknown>> = [];
+                    if (text) parts.push({ type: "text", text });
+                    parts.push({ type: "image", image_url: pendingImageDataUrl });
+                    void append({
+                      role: "user",
+                      content: text,
+                      parts: parts as never,
+                    }).then(() => {
+                      setInput("");
+                      setPendingImageDataUrl("");
+                      setPendingImageName("");
+                      if (imageInputRef.current) imageInputRef.current.value = "";
+                    });
+                  }
+                }}
+              />
+              <button
+                type="button"
+                className={pendingImageDataUrl ? "composer-attach-btn attached" : "composer-attach-btn"}
+                onClick={() => imageInputRef.current?.click()}
+                title={tx.attachImage}
+                aria-label={tx.attachImage}
+                data-tooltip={tx.attachImage}
+              >
+                🖼
+              </button>
+            </div>
             {busy ? (
               <button type="button" className="stop" onClick={() => stop()}>
                 {tx.stop}
               </button>
             ) : (
               <>
-                <button type="submit" className="send" disabled={!input.trim()}>
+                <button type="submit" className="send" disabled={!input.trim() && !pendingImageDataUrl}>
                   {tx.send}
                 </button>
                 {liveSpeech && (
@@ -1135,242 +706,65 @@ export default function App() {
         </div>
       </main>
       </div>
-      {memoriesOpen && (
-        <div className="modal-overlay" onClick={() => setMemoriesOpen(false)}>
-          <div className="modal-card wide" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>{tx.memoryTab}</h3>
-              <button type="button" className="small" onClick={() => setMemoriesOpen(false)}>
-                {tx.close}
-              </button>
-            </div>
-            <p className="muted">Memories for the selected profile</p>
-            <button type="button" className="small" onClick={() => void loadMemory()}>
-              Refresh
-            </button>
-            {memoryRows.map((row) => (
-              <MemoryRowEditor
-                key={`${row.id}:${row.memory}`}
-                row={row}
-                onSave={(text) => void saveMemory(row.id, text)}
-                onDelete={() => void removeMemory(row.id)}
-              />
-            ))}
-            {!memoryRows.length && <p className="muted">No memories yet.</p>}
-          </div>
-        </div>
-      )}
-      {mcpOpen && (
-        <div className="modal-overlay" onClick={() => setMcpOpen(false)}>
-          <div className="modal-card wide" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>{tx.mcpTab}</h3>
-              <button type="button" className="small" onClick={() => setMcpOpen(false)}>
-                {tx.close}
-              </button>
-            </div>
-            <h3>Add MCP server</h3>
-            <div className="row">
-              <input
-                type="text"
-                placeholder="Display name"
-                value={mcpForm.name}
-                onChange={(e) => setMcpForm((f) => ({ ...f, name: e.target.value }))}
-              />
-            </div>
-            <div className="row">
-              <select
-                value={mcpForm.transport}
-                onChange={(e) =>
-                  setMcpForm((f) => ({
-                    ...f,
-                    transport: e.target.value as "http" | "stdio",
-                  }))
-                }
-              >
-                <option value="http">HTTP (streamable)</option>
-                <option value="stdio">stdio</option>
-              </select>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={mcpForm.enabled}
-                  onChange={(e) => setMcpForm((f) => ({ ...f, enabled: e.target.checked }))}
-                />
-                enabled
-              </label>
-            </div>
-            {mcpForm.transport === "http" ? (
-              <div className="row">
-                <input
-                  type="text"
-                  placeholder="MCP URL"
-                  value={mcpForm.url}
-                  onChange={(e) => setMcpForm((f) => ({ ...f, url: e.target.value }))}
-                  style={{ width: "100%" }}
-                />
-              </div>
-            ) : (
-              <>
-                <div className="row">
-                  <input
-                    type="text"
-                    placeholder="Command (e.g. npx)"
-                    value={mcpForm.command}
-                    onChange={(e) => setMcpForm((f) => ({ ...f, command: e.target.value }))}
-                    style={{ width: "100%" }}
-                  />
-                </div>
-                <div className="row">
-                  <input
-                    type="text"
-                    placeholder="Args (space-separated)"
-                    value={mcpForm.args}
-                    onChange={(e) => setMcpForm((f) => ({ ...f, args: e.target.value }))}
-                    style={{ width: "100%" }}
-                  />
-                </div>
-              </>
-            )}
-            <button type="button" className="small primary" onClick={() => void saveMcp()}>
-              Save server
-            </button>
-            <h3 style={{ marginTop: "1rem" }}>Configured</h3>
-            {mcpServers.map((s) => (
-              <div key={s.id} className="mcp-item">
-                <div>
-                  <strong>{s.name}</strong>{" "}
-                  <span className="muted">
-                    {s.transport} {s.enabled ? "" : "(off)"}
-                  </span>
-                </div>
-                <div className="row">
-                  <button type="button" className="small" onClick={() => void testMcp(s.id)}>
-                    Test / list tools
-                  </button>
-                  <button
-                    type="button"
-                    className="small danger"
-                    onClick={() => void deleteMcp(s.id)}
-                  >
-                    Remove
-                  </button>
-                </div>
-              </div>
-            ))}
-            {testResult && (
-              <pre className="tool-part" style={{ marginTop: "0.75rem" }}>
-                {testResult}
-              </pre>
-            )}
-          </div>
-        </div>
-      )}
-      {settingsOpen && (
-        <div className="modal-overlay" onClick={() => setSettingsOpen(false)}>
-          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>{tx.settings}</h3>
-              <button type="button" className="small" onClick={() => setSettingsOpen(false)}>
-                {tx.close}
-              </button>
-            </div>
-            <label className="modal-field">
-              {tx.uiLanguage}
-              <select
-                className="model-select"
-                value={uiLang}
-                onChange={(e) => setUiLang(e.target.value as UiLang)}
-              >
-                <option value="ru">Русский</option>
-                <option value="en">English</option>
-              </select>
-            </label>
-            <h3 style={{ margin: "0.5rem 0" }}>Profiles</h3>
-            <div className="row">
-              <input
-                type="text"
-                placeholder="New profile name"
-                value={newProfileName}
-                onChange={(e) => setNewProfileName(e.target.value)}
-              />
-              <button type="button" className="small primary" onClick={() => void addProfile()}>
-                Add
-              </button>
-            </div>
-            {profiles.map((p) => (
-              <div key={p.id} className="memory-item">
-                <ProfileRow
-                  key={`${p.id}:${p.name}`}
-                  name={p.name}
-                  onSave={(name) => void renameProfile(p.id, name)}
-                  onDelete={() => void removeProfile(p.id)}
-                />
-              </div>
-            ))}
-            <label className="modal-field">
-              {tx.ttsVoice}
-              <select
-                className="model-select"
-                value={activeBrowserVoiceUri}
-                onChange={(e) => setVoiceForActiveProfile(e.target.value)}
-                disabled={!activeProfile?.id}
-              >
-                {!browserVoices.length && <option value="">No browser voices</option>}
-                {browserVoices.map((v) => (
-                  <option key={v.voiceURI} value={v.voiceURI}>
-                    {v.name} ({v.lang})
-                  </option>
-                ))}
-              </select>
-              <span className="muted">Uses your OS/Chrome voices for natural speech.</span>
-            </label>
-          </div>
-        </div>
-      )}
+      <MemoryModal
+        open={memoriesOpen}
+        tx={tx}
+        memoryRows={memoryRows}
+        memoryLoading={memoryLoading}
+        onClose={() => setMemoriesOpen(false)}
+        onRefresh={() => void loadMemory()}
+        onSaveRow={(id, text) => void saveMemory(id, text)}
+        onDeleteRow={(id) => void removeMemory(id)}
+      />
+      <McpModal
+        open={mcpOpen}
+        tx={tx}
+        mcpForm={mcpForm}
+        mcpServers={mcpServers}
+        testResult={testResult}
+        onClose={() => setMcpOpen(false)}
+        onFormChange={setMcpForm}
+        onSave={() => void saveMcp()}
+        onTest={(id) => void testMcp(id)}
+        onDelete={(id) => void deleteMcp(id)}
+      />
+      <SettingsModal
+        open={settingsOpen}
+        tx={tx}
+        uiLang={uiLang}
+        setUiLang={setUiLang}
+        activeProfileId={activeProfile?.id ?? null}
+        activeBrowserVoiceUri={activeBrowserVoiceUri}
+        browserVoices={browserVoices}
+        setVoiceForActiveProfile={setVoiceForActiveProfile}
+        profiles={profiles}
+        newProfileName={newProfileName}
+        setNewProfileName={setNewProfileName}
+        addProfile={() => void addProfile()}
+        renameProfile={(id, name) => void renameProfile(id, name)}
+        removeProfile={(id) => void removeProfile(id)}
+        taskCategories={TASK_CATEGORIES}
+        categoryLabel={(category) => tx[CATEGORY_I18N_KEY[category]]}
+        categoryOptions={categoryOptions}
+        modelsLoading={modelsLoading}
+        categoryModelPrice={(id) => {
+          const m = (modelCatalog?.models ?? models).find((x) => x.id === id);
+          return formatPricePerMillion(m);
+        }}
+        canEditCategory={!!activeProfile?.id}
+        moveCategoryModel={(category, id, direction) => void moveCategoryModel(category, id, direction)}
+        memoryTopKDraft={memoryTopKDraft}
+        setMemoryTopKDraft={setMemoryTopKDraft}
+        memoryMaxCharsDraft={memoryMaxCharsDraft}
+        setMemoryMaxCharsDraft={setMemoryMaxCharsDraft}
+        saveMemoryPolicy={() =>
+          void saveMemoryPolicy({
+            topK: memoryTopKDraft,
+            maxChars: memoryMaxCharsDraft,
+          })
+        }
+        onClose={() => setSettingsOpen(false)}
+      />
     </>
-  );
-}
-
-function ProfileRow(props: {
-  name: string;
-  onSave: (name: string) => void;
-  onDelete: () => void;
-}) {
-  const [v, setV] = useState(props.name);
-  return (
-    <div>
-      <input type="text" value={v} onChange={(e) => setV(e.target.value)} />
-      <button type="button" className="small" onClick={() => props.onSave(v)}>
-        Save
-      </button>
-      <button type="button" className="small danger" onClick={props.onDelete}>
-        Delete
-      </button>
-    </div>
-  );
-}
-
-function MemoryRowEditor(props: {
-  row: MemoryRow;
-  onSave: (text: string) => void;
-  onDelete: () => void;
-}) {
-  const [text, setText] = useState(props.row.memory);
-  return (
-    <div className="memory-item">
-      <div className="muted" style={{ fontSize: "0.75rem" }}>
-        {props.row.id.slice(0, 12)}… score: {props.row.score?.toFixed?.(3) ?? "—"}
-      </div>
-      <textarea className="edit" value={text} onChange={(e) => setText(e.target.value)} />
-      <div className="row">
-        <button type="button" className="small primary" onClick={() => props.onSave(text)}>
-          Update
-        </button>
-        <button type="button" className="small danger" onClick={props.onDelete}>
-          Delete
-        </button>
-      </div>
-    </div>
   );
 }

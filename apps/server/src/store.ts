@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { MongoClient, type Collection, type Db, type OptionalId } from "mongodb";
 import { config } from "./config.js";
+import type { ProfileModelPreferences, ModelSelectionPolicy } from "./modelCatalog.js";
 import { memoryDeleteAllForUser } from "./mem0Service.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -17,6 +18,9 @@ export type MemoryProfile = {
   id: string;
   name: string;
   mem0UserId: string;
+  modelPreferences?: ProfileModelPreferences;
+  memoryPolicy?: Partial<ModelSelectionPolicy>;
+  memoryPins?: string[];
   createdAt: string;
   updatedAt: string;
 };
@@ -76,12 +80,22 @@ async function colMcp(): Promise<Collection<McpServerRecord> | null> {
 }
 
 function ensureDefaultProfile(profiles: MemoryProfile[]): MemoryProfile[] {
-  if (profiles.length) return profiles;
+  if (profiles.length) {
+    return profiles.map((p) => ({
+      ...p,
+      memoryPins: Array.isArray(p.memoryPins) ? p.memoryPins : [],
+      memoryPolicy: p.memoryPolicy ?? {},
+      modelPreferences: p.modelPreferences ?? { categories: {}, updatedAt: p.updatedAt },
+    }));
+  }
   const now = new Date().toISOString();
   const p: MemoryProfile = {
     id: crypto.randomUUID(),
     name: "Default",
     mem0UserId: `profile:${crypto.randomUUID()}`,
+    memoryPins: [],
+    memoryPolicy: {},
+    modelPreferences: { categories: {}, updatedAt: now },
     createdAt: now,
     updatedAt: now,
   };
@@ -113,6 +127,9 @@ export async function createProfile(name: string): Promise<MemoryProfile> {
     id: crypto.randomUUID(),
     name: name.trim() || "Untitled",
     mem0UserId: `profile:${crypto.randomUUID()}`,
+    memoryPins: [],
+    memoryPolicy: {},
+    modelPreferences: { categories: {}, updatedAt: now },
     createdAt: now,
     updatedAt: now,
   };
@@ -127,20 +144,42 @@ export async function createProfile(name: string): Promise<MemoryProfile> {
   return p;
 }
 
-export async function updateProfile(id: string, name: string): Promise<MemoryProfile | null> {
+export async function updateProfile(
+  id: string,
+  patch: {
+    name?: string;
+    modelPreferences?: ProfileModelPreferences;
+    memoryPolicy?: Partial<ModelSelectionPolicy>;
+    memoryPins?: string[];
+  }
+): Promise<MemoryProfile | null> {
   const c = await colProfiles();
   const now = new Date().toISOString();
   if (c) {
     const cur = await c.findOne({ id });
     if (!cur) return null;
-    const next = { ...cur, name: name.trim() || "Untitled", updatedAt: now };
+    const next = {
+      ...cur,
+      ...(typeof patch.name === "string" ? { name: patch.name.trim() || "Untitled" } : {}),
+      ...(patch.modelPreferences ? { modelPreferences: patch.modelPreferences } : {}),
+      ...(patch.memoryPolicy ? { memoryPolicy: patch.memoryPolicy } : {}),
+      ...(patch.memoryPins ? { memoryPins: patch.memoryPins } : {}),
+      updatedAt: now,
+    };
     await c.replaceOne({ id }, next);
     return next;
   }
   const f = await readJson<ProfilesFile>(profilesPath(), { profiles: [] });
   const i = f.profiles.findIndex((x) => x.id === id);
   if (i < 0) return null;
-  f.profiles[i] = { ...f.profiles[i], name: name.trim() || "Untitled", updatedAt: now };
+  f.profiles[i] = {
+    ...f.profiles[i],
+    ...(typeof patch.name === "string" ? { name: patch.name.trim() || "Untitled" } : {}),
+    ...(patch.modelPreferences ? { modelPreferences: patch.modelPreferences } : {}),
+    ...(patch.memoryPolicy ? { memoryPolicy: patch.memoryPolicy } : {}),
+    ...(patch.memoryPins ? { memoryPins: patch.memoryPins } : {}),
+    updatedAt: now,
+  };
   await writeJson(profilesPath(), f);
   return f.profiles[i];
 }
