@@ -15,6 +15,8 @@ export const config = {
   togetherApiKey: process.env.TOGETHER_API_KEY || "",
   mongoUri: process.env.MONGODB_URI || "",
   togetherBaseModel: process.env.TOGETHER_BASE_MODEL || "google/gemma-3n-E4B-it",
+  /** Stronger model used when memory context is present and instruction following matters. */
+  togetherMemoryModel: process.env.TOGETHER_MEMORY_MODEL || "openai/gpt-oss-20b",
   mem0EmbeddingModel: process.env.MEM0_EMBEDDING_MODEL || "",
   mem0EmbeddingDims: Number(process.env.MEM0_EMBEDDING_DIMS) || 1024,
   mem0LlmModel: process.env.MEM0_LLM_MODEL || "",
@@ -28,6 +30,8 @@ export const config = {
   /** Pretty-print logs on stdout (still JSON if false). */
   logPretty: process.env.LOG_PRETTY === "1" || process.env.LOG_PRETTY === "true",
   /** Append the same logs to this file (JSON lines). Directory is created if needed. */
-  logFile: process.env.LOG_FILE?.trim() || "",
+  logFile:
+    process.env.LOG_FILE?.trim() ||
+    path.resolve(__dirname, "../logs/server.log"),
 };
 

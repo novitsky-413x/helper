@@ -3,6 +3,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { config } from "./config.js";
 import { logger } from "./logger.js";
 import { listModelsCached, type TogetherModelRow } from "./togetherModels.js";
+import { markModelUnhealthy } from "./modelHealth.js";
 
 export const TASK_CATEGORIES = [
   "primary",
@@ -43,11 +44,11 @@ const together = createOpenAI({
 });
 
 let snapshot: ModelCatalogSnapshot | null = null;
+let backgroundRefreshRunning = false;
 
 function pricingScore(m: TogetherModelRow): number {
   const p = m.pricing;
   if (!p) return 999_999;
-  // Treat zero/empty token pricing as unknown (not "free"), so it doesn't dominate ranking.
   const inPrice = typeof p.input === "number" && p.input > 0 ? p.input : 999_999;
   const outPrice = typeof p.output === "number" && p.output > 0 ? p.output : 999_999;
   return inPrice + outPrice;
@@ -76,17 +77,31 @@ async function benchmarkLatency(chat: TogetherModelRow[]): Promise<Record<string
           temperature: 0,
         });
         out[m.id] = Date.now() - t0;
-      } catch {
+      } catch (e) {
         out[m.id] = 999_999;
+        const msg = String((e as { message?: string })?.message ?? "").toLowerCase();
+        if (msg.includes("non-serverless") || msg.includes("model_not_available")) {
+          markModelUnhealthy(m.id, msg);
+        }
       }
     })
   );
   return out;
 }
 
+const NON_TEXT_TYPES = new Set(["image", "speech", "audio", "video", "moderation", "embedding"]);
+
+export function isNonTextModel(type: string | undefined): boolean {
+  if (!type) return false;
+  return NON_TEXT_TYPES.has(type);
+}
+
 function fallbackDefaults(models: TogetherModelRow[], latency: Record<string, number>): CategoryRanking {
   const chat = models.filter((m) => m.type === "chat" || m.type === "language" || m.type === "code");
   const image = models.filter((m) => m.type === "image");
+  const audio = models.filter(
+    (m) => m.type === "speech" || m.type === "audio" || /whisper|speech|tts|veo.*audio|orpheus|kokoro|cartesia|sonic|aura/i.test(m.id),
+  );
   const byCostLatency = [...chat].sort((a, b) => byFastCheap(a, b, latency)).map((m) => m.id);
   const byReasoning = [...chat]
     .sort((a, b) => {
@@ -119,7 +134,7 @@ function fallbackDefaults(models: TogetherModelRow[], latency: Record<string, nu
     reasoning: byReasoning.slice(0, 10),
     vision: byVision.slice(0, 10),
     image_gen: image.map((m) => m.id).slice(0, 10),
-    audio: [],
+    audio: audio.map((m) => m.id).slice(0, 10),
     memory: byCostLatency.slice(0, 10),
   };
 }
@@ -171,19 +186,62 @@ ${JSON.stringify(payload)}`,
   }
 }
 
-export async function refreshModelCatalog(): Promise<ModelCatalogSnapshot> {
+/**
+ * Fast catalog: fetches model list + builds fallback defaults (no network pings).
+ * Returns immediately usable snapshot.
+ */
+async function buildFastCatalog(): Promise<ModelCatalogSnapshot> {
   const models = await listModelsCached();
   const chatModels = models.filter((m) => m.type === "chat" || m.type === "language" || m.type === "code");
-  const latencyMsByModel = await benchmarkLatency(chatModels);
-  const llmDefaults = await llmAssignCategories(models, latencyMsByModel);
-  const defaults = llmDefaults ?? fallbackDefaults(models, latencyMsByModel);
-  snapshot = {
+  const defaults = fallbackDefaults(models, {});
+  return {
     refreshedAt: new Date().toISOString(),
     models,
     chatModels,
-    latencyMsByModel,
+    latencyMsByModel: {},
     defaults,
   };
+}
+
+/**
+ * Runs latency benchmarks + LLM category assignment in background,
+ * then updates the snapshot in-place.
+ */
+function scheduleBackgroundEnrichment() {
+  if (backgroundRefreshRunning) return;
+  backgroundRefreshRunning = true;
+  (async () => {
+    try {
+      if (!snapshot) return;
+      const chatModels = snapshot.chatModels;
+      const latencyMsByModel = await benchmarkLatency(chatModels);
+      const llmDefaults = await llmAssignCategories(snapshot.models, latencyMsByModel);
+      const fb = fallbackDefaults(snapshot.models, latencyMsByModel);
+      // LLM only sees chat models — always use fallback for image_gen and audio
+      const defaults: CategoryRanking = llmDefaults
+        ? { ...llmDefaults, image_gen: fb.image_gen, audio: fb.audio }
+        : fb;
+      snapshot = {
+        ...snapshot,
+        refreshedAt: new Date().toISOString(),
+        latencyMsByModel,
+        defaults,
+      };
+      logger.info(
+        { benchmarkedModels: Object.keys(latencyMsByModel).length, llmAssigned: !!llmDefaults },
+        "background catalog enrichment complete"
+      );
+    } catch (e) {
+      logger.warn({ err: e }, "background catalog enrichment failed");
+    } finally {
+      backgroundRefreshRunning = false;
+    }
+  })();
+}
+
+export async function refreshModelCatalog(): Promise<ModelCatalogSnapshot> {
+  snapshot = await buildFastCatalog();
+  scheduleBackgroundEnrichment();
   return snapshot;
 }
 

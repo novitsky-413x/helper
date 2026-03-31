@@ -27,6 +27,8 @@ export type UiText = {
   imageAttached: string;
   send: string;
   stop: string;
+  newChat: string;
+  regenerate: string;
   contextAnalytics: string;
   contextAnalyticsOpen: string;
   contextAnalyticsClose: string;
@@ -137,6 +139,8 @@ export const UI_TEXT: Record<UiLang, UiText> = {
     imageAttached: "Изображение прикреплено",
     send: "Отправить",
     stop: "Стоп",
+    newChat: "Новый чат",
+    regenerate: "Перегенерировать",
     contextAnalytics: "Аналитика контекста",
     contextAnalyticsOpen: "Показать аналитику",
     contextAnalyticsClose: "Скрыть аналитику",
@@ -246,6 +250,8 @@ export const UI_TEXT: Record<UiLang, UiText> = {
     imageAttached: "Image attached",
     send: "Send",
     stop: "Stop",
+    newChat: "New chat",
+    regenerate: "Regenerate",
     contextAnalytics: "Context analytics",
     contextAnalyticsOpen: "Show analytics",
     contextAnalyticsClose: "Hide analytics",

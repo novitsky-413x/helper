@@ -1,7 +1,23 @@
 import { ProfileRow } from "./ProfileRow";
 import type { UiLang, UiText } from "../i18n/uiText";
+import type { ModelHealthEntry } from "../types/appTypes";
 
 type TaskCategory = "primary" | "code_mcp" | "reasoning" | "vision" | "image_gen" | "audio" | "memory";
+
+function HealthDot({ entry }: { entry: ModelHealthEntry | undefined }) {
+  if (!entry || entry.status === "unknown") {
+    return <span className="health-dot unknown" title="Not checked" />;
+  }
+  if (entry.status === "checking") {
+    return <span className="health-dot checking" title="Checking..." />;
+  }
+  const latency = entry.latencyMs != null ? `${entry.latencyMs}ms` : "";
+  if (entry.status === "available") {
+    return <span className="health-dot available" title={`Available${latency ? ` · ${latency}` : ""}`} />;
+  }
+  const errHint = entry.error ? `: ${entry.error.slice(0, 100)}` : "";
+  return <span className="health-dot unavailable" title={`Unavailable${errHint}`} />;
+}
 
 export function SettingsModal(props: {
   open: boolean;
@@ -22,6 +38,7 @@ export function SettingsModal(props: {
   categoryLabel: (category: TaskCategory) => string;
   categoryOptions: Record<TaskCategory, string[]>;
   modelsLoading: boolean;
+  modelHealth: Record<string, ModelHealthEntry>;
   categoryModelPrice: (id: string) => string;
   canEditCategory: boolean;
   moveCategoryModel: (category: TaskCategory, id: string, direction: "up" | "down") => void;
@@ -116,6 +133,7 @@ export function SettingsModal(props: {
                     )}
                     {!props.modelsLoading && ordered.slice(0, 8).map((id, idx) => (
                       <div className="row" key={`${category}:${id}`} style={{ alignItems: "center" }}>
+                        <HealthDot entry={props.modelHealth[id]} />
                         <span style={{ flex: 1 }}>
                           {id}
                           {props.categoryModelPrice(id) ? ` · ${props.categoryModelPrice(id)}` : ""}

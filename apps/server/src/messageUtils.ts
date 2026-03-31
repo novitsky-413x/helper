@@ -68,17 +68,41 @@ export function isLikelyImageGenerationRequest(text: string): boolean {
   const t = text.trim().toLowerCase();
   if (!t) return false;
 
-  // Broad multilingual triggers to avoid extra classifier calls.
+  const metaIntent =
+    /(запомни|запомнить|remember|сохрани|сохранить|store|save|memo|забудь|forget|удали.*пам|delete.*mem|инструкц|instruction|правил|rule|факт|fact|нельзя|запрет|prohibit|forbid|ban)\b/.test(t);
+  if (metaIntent) return false;
+
+  const audioIntent =
+    /(music|song|melody|audio|sound|voice|speech|podcast|tts|read.*aloud)\b/.test(t) ||
+    /(музык|песн|мелоди|аудио|звук|голос|речь|подкаст|озвуч|прочит|прочт|зачит|прослуш)/.test(t);
+  if (audioIntent) return false;
+
   const imageIntent =
     /(generate|create|draw|render|make|illustrate|paint|design)\b/.test(t) ||
     /(сгенерир|созда(й|ть)|нарису(й|йте|ть)|картинк|изображен|иллюстрац|рендер)/.test(t);
   if (!imageIntent) return false;
 
-  // Ignore requests that are very likely about existing images editing/viewing only.
   const nonGenOnly =
     /(analy[sz]e|describe|ocr|caption|upscale|edit|crop|resize)\b/.test(t) ||
-    /(опиши|анализ|распозна|ocr|обреж|измени|улучши|увелич)/.test(t);
+    /(опиш|описа|анализ|распозна|ocr|обреж|измени|улучши|увелич|что.*изображен|что.*на.*картинк)/.test(t);
   return !nonGenOnly;
+}
+
+/** Detect audio/speech/music generation requests. */
+export function isLikelyAudioRequest(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  if (!t) return false;
+
+  const metaIntent =
+    /(запомни|запомнить|remember|сохрани|сохранить|store|save|memo|забудь|forget|удали.*пам|delete.*mem|инструкц|instruction|правил|rule)\b/.test(t);
+  if (metaIntent) return false;
+
+  return (
+    /(generat|creat|mak|play|synthesiz|read.*aloud)\b/.test(t) &&
+    /(audio|sound|voice|speech|music|song|melody|podcast|tts|narrat)\b/.test(t)
+  ) ||
+    /(озвуч|сгенерир.*(?:аудио|звук|голос|речь|музык)|прочит.*вслух|прочт|зачит|прослуш|воспроизвед|сделай.*(?:аудио|звук|озвучк)|генер.*(?:звук|аудио|музык|голос|речь))/.test(t) ||
+    /(generate.*audio|generate.*speech|generate.*sound|text.to.speech|tts\b|read.*aloud|voice.*over|narrat)/.test(t);
 }
 
 /** Heuristic for "improve this image" requests with an attached image. */
@@ -109,8 +133,12 @@ export function isLikelyPriorImageFollowupEditRequest(text: string): boolean {
   const refersPriorImage =
     /(it|this|that|same|previous)\b/.test(t) ||
     /(ее|её|эту|эту же|ту же|предыдущ|картинку|изображение)/.test(t);
-  // Short imperative follow-ups often omit explicit "image" keywords.
-  return editVerb || (refersPriorImage && t.length <= 220);
+  const feedbackOnImage =
+    /(не\s*(совсем|так|то|тот|та|те|похож)|не\s+получил|неправильн|некорректн|не\s+та порода|not\s+(quite|right|correct)|wrong|incorrect)\b/.test(t) ||
+    /(нужен|нужна|нужно|а\s*(можно|можешь|давай)|попроб|try\s+again|redo|ещ[ёе]\s+раз|заново|снова)\b/.test(t) ||
+    /(должен|должна|должно|выглядит|выглядел|look\s*like|supposed|should\s+be)\b/.test(t) ||
+    /(но\s+(это|он|она|оно|чтоб|чтобы)|but\s+(it|this|that|make))\b/.test(t);
+  return editVerb || feedbackOnImage || (refersPriorImage && t.length <= 220);
 }
 
 function markdownImageUrls(text: string): string[] {

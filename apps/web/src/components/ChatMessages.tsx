@@ -1,67 +1,81 @@
-import { memo } from "react";
+import { memo, useEffect, useRef, useCallback, type ComponentPropsWithoutRef } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import rehypeHighlight from "rehype-highlight";
 import type { UiText } from "../i18n/uiText";
+import { CodeBlock } from "./CodeBlock";
+import { ToolInvocationCard } from "./ToolInvocationCard";
+import { collectReasoning, type ChatMsg, type ChatMessagePart } from "./chatUtils";
+
+const remarkPlugins = [remarkGfm];
+const rehypePlugins = [rehypeHighlight];
+
+const mdComponents: ComponentPropsWithoutRef<typeof ReactMarkdown>["components"] = {
+  pre({ children }) {
+    return <pre>{children}</pre>;
+  },
+  code({ className, children, ...rest }) {
+    const isInline = !className && typeof children === "string" && !children.includes("\n");
+    if (isInline) {
+      return <code {...rest}>{children}</code>;
+    }
+    return <CodeBlock className={className}>{children}</CodeBlock>;
+  },
+};
 
 function MessageMarkdown({ text }: { text: string }) {
   if (!text) return null;
   return (
     <div className="msg-markdown">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+      <ReactMarkdown
+        remarkPlugins={remarkPlugins}
+        rehypePlugins={rehypePlugins}
+        components={mdComponents}
+      >
+        {text}
+      </ReactMarkdown>
     </div>
   );
 }
 const MemoMessageMarkdown = memo(MessageMarkdown);
 
-export function collectReasoning(parts: Array<Record<string, unknown>> | null): string {
-  if (!parts) return "";
-  return parts
-    .filter((p) => String(p.type || "") === "reasoning")
-    .map((p) => {
-      const candidates = [p.text, p.reasoning, p.content, p.value];
-      for (const v of candidates) {
-        if (typeof v === "string" && v.trim()) return v;
-      }
-      return "";
-    })
-    .filter(Boolean)
-    .join("\n");
-}
-
-function extractImageRefFromToolInvocation(t: Record<string, unknown>): string | null {
-  const result = t.result;
-  if (typeof result === "string") {
-    const md = result.match(/!\[[^\]]*?\]\((.*?)\)/);
-    if (md?.[1]) return md[1];
-    const url = result.match(/https?:\/\/\S+/);
-    if (url?.[0]) return url[0];
-    const data = result.match(/data:image\/[a-zA-Z]+;base64,[A-Za-z0-9+/=]+/);
-    if (data?.[0]) return data[0];
-  }
-  if (result && typeof result === "object") {
-    const obj = result as Record<string, unknown>;
-    if (typeof obj.url === "string") return obj.url;
-    if (typeof obj.image_url === "string") return obj.image_url;
-  }
-  return null;
-}
-
 export function ChatMessages(props: {
-  messages: Array<any>;
+  messages: ChatMsg[];
   busy: boolean;
   tx: UiText;
   reasoningByMessageId: Record<string, string>;
   stripAgentArtifacts: (s: string) => string;
   messageText: (m: { content?: string; parts?: Array<{ type: string; text?: string }> }) => string;
+  onRegenerate?: () => void;
 }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const userScrolledUpRef = useRef(false);
+
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    userScrolledUpRef.current = distFromBottom > 80;
+  }, []);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || userScrolledUpRef.current) return;
+    el.scrollTop = el.scrollHeight;
+  }, [props.messages, props.busy]);
+
+  const lastAssistantIdx = (() => {
+    for (let i = props.messages.length - 1; i >= 0; i--) {
+      if (props.messages[i].role === "assistant") return i;
+    }
+    return -1;
+  })();
+
   return (
-    <div className="messages">
+    <div className="messages" ref={scrollRef} onScroll={handleScroll}>
       {props.messages.map((m, idx) => (
-        <div key={m.id} className={`msg ${m.role}`}>
+        <div key={m.id} className={`msg ${m.role} msg-animate`}>
           <div className="msg-role">{m.role}</div>
-          {m.role === "assistant" && idx === props.messages.length - 1 && props.busy && (
-            <div className="thinking-inline">{props.tx.thinkingInline}</div>
-          )}
           {m.role === "assistant" &&
             (() => {
               const parts = (m.parts?.length ? m.parts : null) as Array<Record<string, unknown>> | null;
@@ -72,47 +86,70 @@ export function ChatMessages(props: {
               return (
                 <details className="reasoning-block" open={isThinkingNow}>
                   <summary>
+                    {isThinkingNow && <span className="thinking-spinner" aria-hidden="true" />}
                     {props.tx.thinkingDetails}
-                    {isThinkingNow ? ` · ${props.tx.thinkingInline}` : ""}
                   </summary>
                   <pre>{reasoning}</pre>
                 </details>
               );
             })()}
-          {(m.parts?.length ? m.parts : null)?.map((part: any, i: number) => {
+          {(() => {
+            const textParts: string[] = [];
+            return (m.parts?.length ? m.parts : null)?.map((part: ChatMessagePart, i: number) => {
             if (part.type === "text") {
-              const partText = props.stripAgentArtifacts(part.text ?? "");
+              let partText = props.stripAgentArtifacts(part.text ?? "");
+              partText = partText
+                .replace(/!\[[^\]]*?\]\([^)]+\)/g, "")
+                .replace(/\[Open original\]\([^)]+\)/gi, "")
+                .replace(/\[Открыть оригинал\]\([^)]+\)/gi, "")
+                .replace(/\[img:[^\]]+\]/g, "")
+                .replace(/\[audio:[^\]]+\]/g, "")
+                .replace(/\n{3,}/g, "\n\n")
+                .trim();
               if (!partText) return null;
-              const isLatestAssistant = m.role === "assistant" && idx === props.messages.length - 1;
-              const isStreaming = props.busy && isLatestAssistant;
-              if (isStreaming) return <div key={i} className="msg-plain">{partText}</div>;
+              const isDuplicate = textParts.some((prev) => {
+                if (prev === partText) return true;
+                const shorter = prev.length < partText.length ? prev : partText;
+                const longer = prev.length < partText.length ? partText : prev;
+                return shorter.length > 10 && longer.startsWith(shorter);
+              });
+              if (isDuplicate) return null;
+              textParts.push(partText);
               return <MemoMessageMarkdown key={i} text={partText} />;
             }
             if (part.type === "reasoning") return null;
             if (part.type === "tool-invocation") {
-              const t = part.toolInvocation as Record<string, unknown> & { toolName?: string; state?: string };
-              const imageRef = extractImageRefFromToolInvocation(t);
-              return (
-                <div key={i} className="tool-part">
-                  <strong>{String(t.toolName ?? "?")}</strong> ({String(t.state ?? "")})
-                  {imageRef ? (
-                    <div style={{ marginTop: "0.45rem" }}>
-                      <img src={imageRef} alt="generated" style={{ maxWidth: "100%", borderRadius: "8px", border: "1px solid #2f3545" }} />
+              const t = part.toolInvocation as Record<string, unknown> & { toolName?: string; state?: string; args?: Record<string, unknown>; result?: unknown };
+              if (t.toolName === "generate_image" && t.state === "result" && t.result) {
+                const resultStr = typeof t.result === "string" ? t.result : "";
+                const tagMatch = resultStr.match(/\[img:(https?:\/\/[^\]\s]+)\]/);
+                const urlMatch = tagMatch?.[1] || resultStr.match(/https?:\/\/\S+/)?.[0];
+                if (urlMatch) {
+                  return (
+                    <div key={i} className="msg-generated-image">
+                      <img src={urlMatch} alt="generated" loading="lazy" />
                     </div>
-                  ) : null}
-                  <pre style={{ margin: "0.35rem 0 0" }}>{JSON.stringify(t, null, 2)}</pre>
-                </div>
-              );
+                  );
+                }
+              }
+              return <ToolInvocationCard key={i} toolInvocation={t} />;
             }
             return null;
-          }) ??
+          });
+          })() ??
             (props.messageText(m) ? (
-              props.busy && m.role === "assistant" && idx === props.messages.length - 1 ? (
-                <div className="msg-plain">{props.stripAgentArtifacts(props.messageText(m))}</div>
-              ) : (
-                <MemoMessageMarkdown text={props.stripAgentArtifacts(props.messageText(m))} />
-              )
+              <MemoMessageMarkdown text={props.stripAgentArtifacts(props.messageText(m))} />
             ) : null)}
+          {m.role === "assistant" && idx === lastAssistantIdx && !props.busy && props.onRegenerate && (
+            <button
+              type="button"
+              className="msg-regenerate"
+              onClick={props.onRegenerate}
+              title={props.tx.regenerate ?? "Regenerate"}
+            >
+              ↻ {props.tx.regenerate ?? "Regenerate"}
+            </button>
+          )}
         </div>
       ))}
     </div>

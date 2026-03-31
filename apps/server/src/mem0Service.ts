@@ -1,16 +1,18 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import type { Memory as Mem0Memory } from "mem0ai/oss";
 import { config } from "./config.js";
 import { logger } from "./logger.js";
-import { getModelCatalog, resolveCategoryOrder } from "./modelCatalog.js";
+import { isLowQuality, stripModelArtifacts } from "./pipeline/messageQuality.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
 
 let memory: Mem0Memory | null = null;
 let initPromise: Promise<Mem0Memory | null> | null = null;
 let memoryDisabled = false;
-let pgCompatChecked = false;
 let memoryWriteOkCount = 0;
 let memoryWriteFailCount = 0;
 const memoryListCache = new Map<
@@ -19,47 +21,30 @@ const memoryListCache = new Map<
 >();
 const MEMORY_LIST_CACHE_TTL_MS = 8_000;
 
-async function ensurePgCompatForMem0(): Promise<boolean> {
-  if (pgCompatChecked) return !memoryDisabled;
-  pgCompatChecked = true;
-  try {
-    const pg = (await import("pg")) as Record<string, unknown>;
-    // mem0ai/oss currently imports `Client` and `Pool` as named ESM exports from `pg`.
-    if (!("Client" in pg) || !("Pool" in pg)) {
-      memoryDisabled = true;
-      logger.warn(
-        "memory disabled: installed `pg` package does not expose ESM named exports Client/Pool required by mem0ai/oss"
-      );
-      return false;
-    }
-    return true;
-  } catch (e) {
-    memoryDisabled = true;
-    logger.warn({ err: e }, "memory disabled: failed to verify `pg` compatibility");
-    return false;
-  }
+/**
+ * Load mem0ai/oss via CJS require() to avoid the ESM named-import issue with `pg`.
+ * mem0ai/oss's ESM bundle does `import { Client } from "pg"` which fails under
+ * tsx's loader because pg's ESM wrapper isn't properly resolved. The CJS bundle
+ * uses `require("pg")` which always works.
+ */
+function loadMem0Oss(): { Memory: new (config: Record<string, unknown>) => Mem0Memory } {
+  return require("mem0ai/oss") as { Memory: new (config: Record<string, unknown>) => Mem0Memory };
 }
 
-/** Dynamic import avoids loading `mem0ai` (and optional pgvector paths) until memory is used. */
+export async function getMemoryInstance(): Promise<Mem0Memory | null> {
+  return getMemory();
+}
+
 async function getMemory(): Promise<Mem0Memory | null> {
   if (!config.togetherApiKey) return null;
   if (memoryDisabled) return null;
-  if (!(await ensurePgCompatForMem0())) return null;
   if (memory) return memory;
   if (!initPromise) {
     initPromise = (async () => {
-      let mem0LlmModel = config.mem0LlmModel || config.togetherBaseModel;
+      const mem0LlmModel = config.mem0LlmModel || config.togetherBaseModel;
       const mem0EmbeddingModel = config.mem0EmbeddingModel || "intfloat/multilingual-e5-large-instruct";
-      if (!config.mem0LlmModel) {
-        try {
-          const catalog = await getModelCatalog();
-          const ranked = resolveCategoryOrder("memory", undefined, catalog);
-          if (ranked[0]) mem0LlmModel = ranked[0];
-        } catch {
-          /* ignore, keep base fallback */
-        }
-      }
-      const { Memory } = await import("mem0ai/oss");
+      logger.info({ mem0LlmModel, mem0EmbeddingModel }, "mem0 initializing");
+      const { Memory } = loadMem0Oss();
       memory = new Memory({
         version: "v1.1",
         historyDbPath: config.mem0HistoryDb,
@@ -89,7 +74,7 @@ async function getMemory(): Promise<Mem0Memory | null> {
         },
         customPrompt:
           "You extract durable facts and preferences about the user for long-term memory. Ignore transient trivia.",
-      });
+      } as Record<string, unknown>);
       return memory;
     })().catch((e) => {
       initPromise = null;
@@ -152,6 +137,20 @@ function trimToChars(lines: string[], maxChars: number): string[] {
   return out;
 }
 
+const TRIVIAL_RE = /^(привет|здравствуйте?|hi|hello|hey|yo|хай|ок|ok|okay|да|нет|yes|no|спасибо|thanks|thank you|благодарю|пока|bye|good\s*bye|ладно|понятно|ясно|хорошо|good|great|cool|nice|fine|sup|ага|угу|lol|haha|gg|wow|hmm|ну|э+|а+|o+h?)[\s!?.,]*$/i;
+
+function isTrivialMessage(text: string): boolean {
+  const t = text.trim();
+  return t.length < 40 && TRIVIAL_RE.test(t);
+}
+
+const INSTRUCTION_RE =
+  /\b(нельзя|запрет|запрещ|не генерир|не создава|никогда|never|don'?t|do not|prohibit|forbid|ban|block|avoid|must not|should not|не рису|не делай|не показыва|не отправля|instruction|rule|always|всегда|обязательн)\b/i;
+
+function isInstructionMemory(text: string): boolean {
+  return INSTRUCTION_RE.test(text);
+}
+
 export async function buildMemoryContext(params: {
   query: string;
   userId: string;
@@ -164,6 +163,13 @@ export async function buildMemoryContext(params: {
     ...(params.policy ?? {}),
   };
   const pinnedLines = params.pinned.filter((x) => x.trim()).map((x) => `- ${x.trim()}`);
+
+  if (isTrivialMessage(params.query)) {
+    if (!pinnedLines.length) return { block: "", hits: 0 };
+    const lines = trimToChars(pinnedLines, policy.maxChars);
+    return { block: `Pinned memory:\n${lines.join("\n")}`, hits: lines.length };
+  }
+
   if (params.isSimpleRequest && policy.pinnedOnlyForSimple) {
     if (!pinnedLines.length) return { block: "", hits: 0 };
     const lines = trimToChars(pinnedLines, policy.maxChars);
@@ -180,6 +186,23 @@ export async function buildMemoryContext(params: {
     selected.push(`- (${row.id.slice(0, 8)}…) ${row.memory.trim()}`);
     if (selected.length >= policy.topK) break;
   }
+
+  // Always include instruction/prohibition memories even if semantic search didn't match.
+  // These are rules the user explicitly stored — they must always be visible to the LLM.
+  try {
+    const allMemories = await memoryGetAll(params.userId, 100);
+    for (const mem of allMemories) {
+      const key = mem.text.trim().toLowerCase();
+      if (!key || unique.has(key)) continue;
+      if (isInstructionMemory(mem.text)) {
+        unique.add(key);
+        selected.push(`- (${mem.id.slice(0, 8)}…) [RULE] ${mem.text.trim()}`);
+      }
+    }
+  } catch (e) {
+    logger.warn({ err: e }, "failed to fetch instruction memories");
+  }
+
   const combined = [...pinnedLines, ...selected];
   const lines = trimToChars(combined, policy.maxChars);
   if (!lines.length) return { block: "", hits: 0 };
@@ -189,6 +212,23 @@ export async function buildMemoryContext(params: {
       lines.join("\n"),
     hits: lines.length,
   };
+}
+
+const DEDUP_SIMILARITY_THRESHOLD = 0.92;
+
+async function isDuplicateMemory(m: Mem0Memory, userId: string, text: string): Promise<boolean> {
+  try {
+    const results = await m.search(text, { userId, limit: 3 });
+    for (const r of results.results) {
+      if (typeof r.score === "number" && r.score >= DEDUP_SIMILARITY_THRESHOLD) {
+        logger.debug({ userId, existingId: r.id, score: r.score }, "dedup: skipping near-duplicate memory");
+        return true;
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
 }
 
 export async function addConversationToMemory(
@@ -203,33 +243,64 @@ export async function addConversationToMemory(
   }
   const cleanUser = sanitizeMemoryText(userContent);
   const cleanAssistant = sanitizeMemoryText(assistantContent);
+  if (!cleanAssistant || cleanAssistant.length < 5 || isLowQuality(cleanAssistant)) {
+    return false;
+  }
   const fallback = `User: ${cleanUser}\nAssistant: ${cleanAssistant}`.trim();
   if (!fallback) {
     memoryWriteFailCount += 1;
     return false;
   }
-  try {
-    // Keep memory writes deterministic and stable.
-    // infer=true in mem0ai/oss intermittently fails with provider-specific flows.
-    await m.add(fallback, { userId, infer: false });
-    memoryListCache.delete(userId);
+
+  if (await isDuplicateMemory(m, userId, fallback)) {
     memoryWriteOkCount += 1;
     return true;
-  } catch (e) {
-    memoryWriteFailCount += 1;
-    logger.error({ err: e, userId }, "mem0 add failed");
-    return false;
+  }
+
+  try {
+    await m.add(fallback, { userId, infer: true });
+    memoryListCache.delete(userId);
+    memoryWriteOkCount += 1;
+    logger.debug({ userId, chars: fallback.length }, "mem0 add succeeded (infer=true)");
+    return true;
+  } catch (inferErr) {
+    logger.warn(
+      { err: inferErr, userId, textPreview: fallback.slice(0, 120) },
+      "mem0 add with infer=true failed, retrying with infer=false"
+    );
+    try {
+      await m.add(fallback, { userId, infer: false });
+      memoryListCache.delete(userId);
+      memoryWriteOkCount += 1;
+      logger.debug({ userId, chars: fallback.length }, "mem0 add succeeded (infer=false fallback)");
+      return true;
+    } catch (e) {
+      memoryWriteFailCount += 1;
+      logger.error(
+        { err: e, userId, textPreview: fallback.slice(0, 120) },
+        "mem0 add failed (both infer=true and infer=false)"
+      );
+      return false;
+    }
   }
 }
 
+const MAX_MEMORY_TEXT_CHARS = 1800;
+
 function sanitizeMemoryText(input: string): string {
-  const s = String(input ?? "").trim();
+  const s = stripModelArtifacts(String(input ?? "").trim());
   if (!s) return "";
-  // Remove huge inline payloads and keep semantic user intent.
-  const withoutDataUrls = s.replace(/data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=\s]+/gi, "[image-data]");
-  const withoutMdImages = withoutDataUrls.replace(/!\[[^\]]*]\([^)]*\)/g, "[image]");
-  const collapsed = withoutMdImages.replace(/\s+/g, " ").trim();
-  return collapsed.length > 3000 ? `${collapsed.slice(0, 3000)}...` : collapsed;
+  let out = s;
+  out = out.replace(/data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=\s]+/gi, "");
+  out = out.replace(/!\[[^\]]*]\([^)]*\)/g, "");
+  out = out.replace(/\[img:https?:\/\/[^\]\s]+\][^\n]*/g, "");
+  out = out.replace(/\[audio:\/api\/audio\/file\/[\w-]+\][^\n]*/g, "");
+  out = out.replace(/"\\*"?\{[\s\S]*?\}\\*"?"/g, "");
+  out = out.replace(/<audio[^>]*>[\s\S]*?<\/audio>/gi, "");
+  out = out.replace(/<audio[^>]*\/?\s*>/gi, "");
+  out = out.replace(/https?:\/\/api\.together\.ai\/shrt\/\S+/g, "");
+  const collapsed = out.replace(/\s+/g, " ").trim();
+  return collapsed.length > MAX_MEMORY_TEXT_CHARS ? `${collapsed.slice(0, MAX_MEMORY_TEXT_CHARS)}...` : collapsed;
 }
 
 /** Shape expected by `index.ts` when listing all memories for a profile */
@@ -277,4 +348,58 @@ export async function memoryDeleteAllForUser(userId: string) {
 
 export function getMemoryWriteStats(): { ok: number; fail: number } {
   return { ok: memoryWriteOkCount, fail: memoryWriteFailCount };
+}
+
+const VECTOR_SNAPSHOT_PATH = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../data/vector-snapshot.json"
+);
+
+export async function persistVectorStore(): Promise<void> {
+  const m = await getMemory();
+  if (!m) return;
+  try {
+    const allData: Record<string, unknown[]> = {};
+    const userIds = [...memoryListCache.keys()];
+    for (const userId of userIds) {
+      const rows = await m.getAll({ userId, limit: 500 });
+      allData[userId] = rows.results.map((r) => ({
+        id: r.id,
+        memory: r.memory,
+        userId,
+        createdAt: r.createdAt ?? "",
+        updatedAt: r.updatedAt ?? "",
+      }));
+    }
+    const dir = path.dirname(VECTOR_SNAPSHOT_PATH);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(VECTOR_SNAPSHOT_PATH, JSON.stringify(allData, null, 2), "utf-8");
+    logger.info({ path: VECTOR_SNAPSHOT_PATH, users: userIds.length }, "vector store snapshot saved");
+  } catch (e) {
+    logger.warn({ err: e }, "failed to persist vector store");
+  }
+}
+
+export async function restoreVectorStore(): Promise<void> {
+  if (!existsSync(VECTOR_SNAPSHOT_PATH)) return;
+  const m = await getMemory();
+  if (!m) return;
+  try {
+    const raw = readFileSync(VECTOR_SNAPSHOT_PATH, "utf-8");
+    const data = JSON.parse(raw) as Record<string, Array<{ memory: string; userId: string }>>;
+    let count = 0;
+    for (const [userId, rows] of Object.entries(data)) {
+      for (const row of rows) {
+        try {
+          await m.add(row.memory, { userId, infer: false });
+          count++;
+        } catch {
+          // skip individual failures
+        }
+      }
+    }
+    logger.info({ path: VECTOR_SNAPSHOT_PATH, restoredCount: count }, "vector store snapshot restored");
+  } catch (e) {
+    logger.warn({ err: e }, "failed to restore vector store");
+  }
 }

@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { McpForm } from "../components/McpModal";
-import type { ModelCatalog, McpServer, MemoryRow, Profile, TaskCategory, UsageSnapshot } from "../types/appTypes";
+import type { ModelCatalog, McpServer, MemoryRow, Profile, TaskCategory, UsageSnapshot, ModelHealthEntry } from "../types/appTypes";
 
 const LS_PROFILE = "helper-active-profile";
 
@@ -31,6 +31,8 @@ export function useBackendData(params: {
   const [lastUsage, setLastUsage] = useState<UsageSnapshot | null>(null);
   const [usageLoading, setUsageLoading] = useState(false);
   const [usageLoadedForProfileId, setUsageLoadedForProfileId] = useState<string | null>(null);
+  const [modelHealth, setModelHealth] = useState<Record<string, ModelHealthEntry>>({});
+  const healthPollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const activeProfile = useMemo(
     () => profiles.find((p) => p.id === activeProfileId) ?? profiles[0] ?? null,
@@ -46,11 +48,34 @@ export function useBackendData(params: {
       if (j.catalog) {
         setModelCatalog(j.catalog);
         setModels(j.catalog.chatModels ?? []);
+        if (j.catalog.healthByModel) {
+          setModelHealth(j.catalog.healthByModel);
+        }
       }
     } catch {
       /* ignore */
     } finally {
       setModelsLoading(false);
+    }
+  }, []);
+
+  const pollHealth = useCallback(async (remainingRetries = 5) => {
+    try {
+      const r = await fetch("/api/models/health");
+      if (!r.ok) return;
+      const j = (await r.json()) as { health: Record<string, ModelHealthEntry>; checking: boolean };
+      setModelHealth(j.health);
+      const entryCount = Object.keys(j.health).length;
+      if (j.checking || (entryCount < 3 && remainingRetries > 0)) {
+        healthPollRef.current = setTimeout(
+          () => void pollHealth(remainingRetries - 1),
+          j.checking ? 2000 : 4000
+        );
+      }
+    } catch {
+      if (remainingRetries > 0) {
+        healthPollRef.current = setTimeout(() => void pollHealth(remainingRetries - 1), 4000);
+      }
     }
   }, []);
 
@@ -112,12 +137,15 @@ export function useBackendData(params: {
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      void loadModels();
+      void loadModels().then(() => void pollHealth());
       void loadProfiles();
       void loadMcp();
     }, 0);
-    return () => window.clearTimeout(timer);
-  }, [loadModels, loadProfiles, loadMcp]);
+    return () => {
+      window.clearTimeout(timer);
+      if (healthPollRef.current) clearTimeout(healthPollRef.current);
+    };
+  }, [loadModels, loadProfiles, loadMcp, pollHealth]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -270,6 +298,7 @@ export function useBackendData(params: {
     models,
     modelCatalog,
     modelsLoading,
+    modelHealth,
     profiles,
     profilesLoaded,
     activeProfileId,

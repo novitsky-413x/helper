@@ -6,4 +6,5 @@ apps/server/data/*.json
 !apps/server/data/.gitkeep
 apps/server/data/*.db
 apps/server/models/
+apps/server/logs/
 .DS_Store
