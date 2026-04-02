@@ -1,8 +1,10 @@
 import path from "node:path";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(__dirname, "../../..");
 // Monorepo: src/ and dist/ live under apps/server — repo-root .env is three levels up.
 dotenv.config({
   path: path.resolve(__dirname, "../../../.env"),
@@ -24,6 +26,16 @@ export const config = {
     process.env.MEM0_HISTORY_DB ||
     path.resolve(__dirname, "../data/mem0-history.db"),
   maxToolRounds: Number(process.env.MAX_TOOL_ROUNDS) || 8,
+
+  /** Agent workspace — all files the agent creates go here. */
+  agentWorkspace:
+    process.env.AGENT_WORKSPACE?.trim() ||
+    path.resolve(repoRoot, "workspace"),
+
+  /** OS metadata exposed to the system prompt. */
+  platform: process.platform as string,
+  shell: process.platform === "win32" ? "PowerShell" : "bash",
+  hostname: os.hostname(),
 
   /** Pino level: trace | debug | info | warn | error | fatal */
   logLevel: (process.env.LOG_LEVEL || "info").toLowerCase(),

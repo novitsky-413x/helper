@@ -21,11 +21,18 @@ router.post("/", async (req, res) => {
   res.json(profile);
 });
 
-const ProfilePatch = z.object({ name: z.string() });
+const ProfilePatch = z.object({
+  name: z.string().optional(),
+  avatarEmoji: z.string().optional(),
+  personality: z.string().optional(),
+  voiceStyle: z.string().optional(),
+  systemPromptMode: z.enum(["replace", "append", "prepend"]).optional(),
+  customSystemPrompt: z.string().optional(),
+});
 router.patch("/:id", async (req, res) => {
   const p = ProfilePatch.safeParse(req.body);
   if (!p.success) return res.status(400).json(p.error.flatten());
-  const updated = await updateProfile(req.params.id!, { name: p.data.name });
+  const updated = await updateProfile(req.params.id!, p.data);
   if (!updated) return res.status(404).json({ error: "Not found" });
   res.json(updated);
 });

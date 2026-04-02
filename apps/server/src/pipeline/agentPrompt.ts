@@ -1,4 +1,7 @@
 import type { TaskCategory } from "../modelCatalog.js";
+import type { MemoryProfile } from "../store.js";
+import { config } from "../config.js";
+import { buildPersonaPromptLayer } from '../services/persona.js';
 
 export function detectUserLanguage(text: string): string {
   if (!text) return "en";
@@ -16,6 +19,7 @@ export function buildAgentSystemPrompt(params: {
   hasPriorAssistantImage: boolean;
   date: Date;
   userLanguage?: string;
+  profile?: MemoryProfile | null;
 }): string {
   const dateStr = params.date.toLocaleDateString("en-US", {
     weekday: "long",
@@ -25,16 +29,30 @@ export function buildAgentSystemPrompt(params: {
   });
 
   const lang = params.userLanguage || "en";
+  const langName = lang === "ru" ? "Russian (Русский)" : "English";
   const langInstruction = lang === "ru"
-    ? "You MUST respond in Russian (Русский). All your replies, explanations, and confirmations must be in Russian."
-    : `You MUST respond in the same language as the user's last message.`;
+    ? "You MUST respond EXCLUSIVELY in Russian (Русский). ALL your text — replies, confirmations, explanations, tool result summaries — must be in Russian. NEVER use English words or phrases."
+    : "You MUST respond in the same language as the user's last message.";
 
   const parts: string[] = [];
 
+  const osMap: Record<string, string> = { win32: "Windows", darwin: "macOS", linux: "Linux" };
+  const osName = osMap[config.platform] || config.platform;
+
   parts.push(`You are Helper, an intelligent AI agent. Today is ${dateStr}.
+
+## Environment
+- **OS**: ${osName}
+- **Shell**: ${config.shell} (all bash tool commands run in ${config.shell})
+- **Working directory**: ${config.agentWorkspace}
+- **Hostname**: ${config.hostname}
+When running shell commands, ALWAYS use ${osName}-compatible syntax. For example on Windows use PowerShell cmdlets (New-Item, Get-Content, Set-Content), not Unix commands (touch, cat, echo >).
 
 ## LANGUAGE RULE (MANDATORY)
 ${langInstruction}
+
+## Internal reasoning
+When you need to analyze, plan, or reason about a complex request, wrap your thinking inside <think>...</think> tags. This content will be shown to the user in a collapsible "Thinking" section, keeping the main response clean. Put your final answer OUTSIDE the tags.
 
 ## Core behavior
 - Think step-by-step before acting on complex requests
@@ -42,9 +60,22 @@ ${langInstruction}
 - Use available tools when they help accomplish the user's goal
 - If a request is ambiguous, ask ONE brief clarifying question before proceeding
 
+## Error recovery
+If a tool call or command fails:
+1. Analyze the error message carefully
+2. Identify the cause (wrong syntax for OS, missing file, permission issue, etc.)
+3. Retry with a corrected approach — do NOT give up after a single failure
+4. If multiple retries fail, explain the issue honestly to the user
+
+## CRITICAL: Tool integrity (MANDATORY)
+- NEVER pretend to call a tool by writing tool-call-like text. You MUST use the function calling API to invoke any tool. If you cannot invoke a tool, say so honestly.
+- NEVER claim you performed an action (created a file, ran a command, etc.) unless you received a confirmed tool result proving it succeeded.
+- If you called a tool but the result indicates failure, report the failure honestly — do NOT tell the user it succeeded.
+- When creating multiple files or performing multiple actions, execute EACH one as a separate tool call. Do NOT skip any.
+
 ## CRITICAL: Tool output handling
 When you call a tool and it returns a result, the UI automatically displays images, audio players, etc. to the user.
-Your follow-up text after a tool call should ONLY be a brief 1-sentence confirmation (e.g. "Here is the generated image!" or "Audio ready!").
+Your follow-up text after a tool call should ONLY be a brief 1-sentence confirmation in ${langName}.${lang === "ru" ? '\nExamples: "Вот сгенерированное изображение!", "Аудио готово!", "Файл создан!"' : '\nExamples: "Here is the generated image!", "Audio ready!", "File created!"'}
 NEVER repeat, quote, or reference tool result strings like URLs, tags, JSON, or file paths in your text.
 NEVER write markdown image links like ![...](url) — the UI renders them from tool results.
 
@@ -112,6 +143,20 @@ Do NOT call generate_audio with a music description — it will just speak the d
     parts.push(
       "## Audio-related request detected\nThe user's message appears to be about audio. Determine whether they want:\n- **Speech/TTS** (reading text aloud, narration, voiceover) → call generate_audio with the text to speak.\n- **Music/sound effects** (melody, beat, track, sound) → explain that you only have TTS capabilities and cannot generate music or sound effects. Suggest alternatives."
     );
+  }
+
+  if (params.profile) {
+    const personaLayer = buildPersonaPromptLayer(params.profile);
+    if (personaLayer) {
+      if (params.profile.systemPromptMode === 'replace') {
+        return personaLayer;
+      }
+      parts.push(personaLayer);
+    }
+  }
+
+  if (lang === "ru") {
+    parts.push("## НАПОМИНАНИЕ\nОтвечай ТОЛЬКО на русском языке. Не используй английский ни в одном предложении.");
   }
 
   return parts.join("\n\n");

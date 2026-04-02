@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import type { Message } from "@ai-sdk/react";
 import type { Profile } from "../types/appTypes";
 
 const LS_PROFILE_CHATS = "helper-profile-chats";
@@ -25,7 +26,7 @@ export function useProfileChats(params: {
   profiles: Profile[];
   profilesLoaded: boolean;
   messages: unknown[];
-  setMessages: (msgs: any) => void;
+  setMessages: (msgs: Message[]) => void;
   setLastUsage: (v: null) => void;
   setResolvedModelId: (v: string | null) => void;
   setResolvedBaseModel: (v: string | null) => void;

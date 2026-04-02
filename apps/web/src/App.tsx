@@ -12,8 +12,16 @@ import { collectReasoning } from './components/chatUtils';
 import { AnalyticsPanel } from './components/AnalyticsPanel';
 import { AppHeader } from './components/AppHeader';
 import { ChatComposer } from './components/ChatComposer';
+import { ChatSessionList } from './components/ChatSessionList';
 import type { TaskCategory } from './types/appTypes';
 import { formatPricePerMillion, useAnalyticsMetrics } from './hooks/useAnalyticsMetrics';
+import { Sidebar } from './components/Sidebar';
+import { BottomPanel } from './components/BottomPanel';
+import { NotificationToast } from './components/NotificationToast';
+import { AutopilotPanel } from './components/AutopilotPanel';
+import { LearningDashboard } from './components/LearningDashboard';
+import { WikiBrowser } from './components/WikiBrowser';
+import { useAppStore } from './store/index.js';
 import './App.css';
 
 const LS_UI_LANG = 'helper-ui-lang';
@@ -58,22 +66,24 @@ function messageText(m: { content?: string; parts?: Array<{ type: string; text?:
 function stripAgentArtifacts(text: string): string {
     if (!text) return '';
     let out = text;
-    out = out.replace(/<\|start\|>assistant[\s\S]*?<\|call\|>/gi, '');
-    out = out.replace(/<\|channel\|>commentary[\s\S]*?(?=(<\|start\|>assistant|$))/gi, '');
-    out = out.replace(/<\|constrain\|>json/gi, '');
-    out = out.replace(/<\|message\|>\{[\s\S]*?\}/gi, '');
+    // Remove hallucinated tool-call blocks
+    out = out.replace(/<\|start\|>[\s\S]*?(?:<\|end\|>|$)/g, '');
+    // Remove channel routing (analysis/commentary → final)
+    out = out.replace(/<\|channel\|>(?:analysis|commentary)[\s\S]*?(?:<\|channel\|>final<\|message\|>|$)/gi, '');
+    // Remove all remaining control tokens
+    out = out.replace(/<\|[^|]*?\|>/g, '');
+    // Remove orphaned routing words before Cyrillic/Latin text
+    out = out.replace(/\b(?:final|commentary)(?=[А-Яа-яA-Z])/g, '');
     out = out.replace(/to=use_other_model/gi, '');
-    out = out.replace(/<\|[^|]+?\|>/g, '');
-    out = out.replace(/<\|im_end\|>/gi, '');
-    out = out.replace(/<\|im_start\|>[^\n]*/gi, '');
     // Strip tool result tags that the model may echo
     out = out.replace(/\[img:https?:\/\/[^\]\s]+\][^\n]*/g, '');
     out = out.replace(/\[audio:\/api\/audio\/file\/[\w-]+\][^\n]*/g, '');
-    // Strip escaped JSON blobs from tool results (e.g. "\"{\\\"type\\\"...}\"")
+    // Strip escaped JSON blobs from tool results
     out = out.replace(/"\\*"?\{[\s\S]*?\}\\*"?"/g, '');
     // Strip leaked HTML audio tags
     out = out.replace(/<audio[^>]*>[^<]*<\/audio>/gi, '');
     out = out.replace(/<audio[^>]*\/?\s*>/gi, '');
+    // Collapse whitespace
     out = out.replace(/\n{3,}/g, '\n\n').trim();
     return out;
 }
@@ -119,6 +129,7 @@ export default function App() {
         saveMcp,
         testMcp,
         deleteMcp,
+        loadProfiles,
     } = useBackendData({
         profileDeleteConfirm: tx.profileDeleteConfirm,
         memoryDeleteConfirm: tx.memoryDeleteConfirm,
@@ -158,6 +169,8 @@ export default function App() {
     const [pendingImageName, setPendingImageName] = useState<string>('');
     const imageInputRef = useRef<HTMLInputElement | null>(null);
 
+    const agentMode = useAppStore((s) => s.agentMode);
+
     const activeBrowserVoiceUri: string = activeProfile?.id ? profileVoiceMap[activeProfile.id] ?? '' : '';
 
     useEffect(() => {
@@ -181,7 +194,7 @@ export default function App() {
         append,
     } = useChat({
         api: '/api/chat',
-        body: { model: modelChoice, profileId: activeProfile?.id },
+        body: { model: modelChoice, profileId: activeProfile?.id, agentMode },
         onResponse: (response) => {
             const resolved = response.headers.get('x-helper-resolved-model');
             const baseModel = response.headers.get('x-helper-base-model');
@@ -365,26 +378,26 @@ export default function App() {
         }
         e.preventDefault();
         const text = input.trim();
-        const parts: Array<Record<string, unknown>> = [];
-        if (text) parts.push({ type: 'text', text });
-        parts.push({ type: 'image', image_url: pendingImageDataUrl });
-        await append({ role: 'user', content: text, parts: parts as never });
+        const dataUrl = pendingImageDataUrl;
         setInput('');
         setPendingImageDataUrl('');
         setPendingImageName('');
         if (imageInputRef.current) imageInputRef.current.value = '';
-    };
-
-    const handleAppendImage = (text: string, dataUrl: string) => {
         const parts: Array<Record<string, unknown>> = [];
         if (text) parts.push({ type: 'text', text });
         parts.push({ type: 'image', image_url: dataUrl });
-        void append({ role: 'user', content: text, parts: parts as never }).then(() => {
-            setInput('');
-            setPendingImageDataUrl('');
-            setPendingImageName('');
-            if (imageInputRef.current) imageInputRef.current.value = '';
-        });
+        await append({ role: 'user', content: text, parts: parts as never });
+    };
+
+    const handleAppendImage = (text: string, dataUrl: string) => {
+        setInput('');
+        setPendingImageDataUrl('');
+        setPendingImageName('');
+        if (imageInputRef.current) imageInputRef.current.value = '';
+        const parts: Array<Record<string, unknown>> = [];
+        if (text) parts.push({ type: 'text', text });
+        parts.push({ type: 'image', image_url: dataUrl });
+        void append({ role: 'user', content: text, parts: parts as never });
     };
 
     const setVoiceForActiveProfile = (voiceUri: string) => {
@@ -392,9 +405,71 @@ export default function App() {
         setProfileVoiceMap((prev) => ({ ...prev, [activeProfile.id]: voiceUri }));
     };
 
+    const sidebarOpen = useAppStore((s) => s.sidebarOpen);
+    const activeView = useAppStore((s) => s.activeView);
+    const setAgentMode = useAppStore((s) => s.setAgentMode);
+    const activeChatSessionId = useAppStore((s) => s.activeChatSessionId);
+
+    // Save messages to server session when they change
+    useEffect(() => {
+        if (!activeChatSessionId || messages.length === 0) return;
+        const timer = setTimeout(() => {
+            fetch(`/api/chat-sessions/${activeChatSessionId}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ messages }),
+            }).catch(() => {});
+        }, 2000);
+        return () => clearTimeout(timer);
+    }, [messages, activeChatSessionId]);
+
+    // One-time migration from localStorage to server sessions
+    const migrationDoneRef = useRef(false);
+    useEffect(() => {
+        if (migrationDoneRef.current || !activeProfile?.id) return;
+        const chatSessions = useAppStore.getState().chatSessions;
+        if (chatSessions.length > 0) return;
+
+        const raw = localStorage.getItem('helper-profile-chats');
+        if (!raw) return;
+        try {
+            const parsed = JSON.parse(raw) as Record<string, unknown[]>;
+            const profileMsgs = parsed[activeProfile.id];
+            if (!profileMsgs || profileMsgs.length === 0) return;
+
+            migrationDoneRef.current = true;
+            fetch('/api/chat-sessions/import', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    sessions: [{ profileId: activeProfile.id, title: 'Migrated Chat', messages: profileMsgs }],
+                }),
+            }).then(() => {
+                return fetch(`/api/chat-sessions?profileId=${activeProfile.id}`);
+            }).then(res => res.json()).then(data => {
+                useAppStore.getState().setChatSessions(data.sessions ?? []);
+            }).catch(() => {});
+        } catch { /* ignore */ }
+    }, [activeProfile?.id]);
+
     return (
         <>
-            <div className="layout">
+            <NotificationToast />
+            <div className={`layout ${sidebarOpen ? 'with-sidebar' : ''}`}>
+                <Sidebar activeProfile={activeProfile} />
+                {activeView === 'chat' && (
+                    <div className="chat-history-panel">
+                        <ChatSessionList
+                            profileId={activeProfile?.id ?? null}
+                            onSessionSelect={(_sessionId, msgs) => {
+                                setMessages(msgs as Parameters<typeof setMessages>[0]);
+                            }}
+                            onNewChat={() => {
+                                setMessages([]);
+                            }}
+                        />
+                    </div>
+                )}
                 <main className="chat-main">
                     <AppHeader
                         tx={tx}
@@ -419,23 +494,47 @@ export default function App() {
                         ttsOutputEnabled={ttsOutputEnabled}
                         setTtsOutputEnabled={setTtsOutputEnabled}
                     />
-                    {error && <div className="error-banner">{error.message || String(error)}</div>}
-                    {liveSpeech && liveVoiceError && (
+                    {activeView === 'chat' && (
+                        <div className="agent-mode-bar">
+                            <button
+                                type="button"
+                                className={`agent-mode-toggle ${agentMode ? 'active' : ''}`}
+                                onClick={() => setAgentMode(!agentMode)}
+                                title={agentMode ? 'Agent Mode ON — multi-turn autonomous' : 'Agent Mode OFF — standard chat'}
+                            >
+                                {agentMode ? '🤖 Agent' : '💬 Chat'}
+                            </button>
+                        </div>
+                    )}
+                    {activeView === 'learning' && (
+                        <LearningDashboard profileId={activeProfile?.id} />
+                    )}
+                    {activeView === 'wiki' && (
+                        <WikiBrowser profileId={activeProfile?.id} />
+                    )}
+                    {activeView === 'autopilot' && <AutopilotPanel />}
+                    {activeView === 'settings' && (
+                        <div style={{ padding: '1rem' }}>
+                            <button className="btn-outline" onClick={() => setSettingsOpen(true)}>Open Settings</button>
+                        </div>
+                    )}
+                    {activeView === 'chat' && error && <div className="error-banner">{error.message || String(error)}</div>}
+                    {activeView === 'chat' && liveSpeech && liveVoiceError && (
                         <div className="error-banner voice-hint">{liveVoiceError}</div>
                     )}
-                    {!liveSpeech && busy && (
+                    {activeView === 'chat' && !liveSpeech && busy && (
                         <div className="status-bar busy" aria-live="polite">
                             <span className="thinking-spinner" aria-hidden="true" />
                             <span>{tx.thinkingInline}</span>
                         </div>
                     )}
-                    {!liveSpeech && !busy && (
+                    {activeView === 'chat' && !liveSpeech && !busy && (
                         <div className="status-bar">
                             <span>{tx.ready}</span>
                             {modelChoice === 'auto' && <span className="muted"> — auto</span>}
                         </div>
                     )}
-                    {liveSpeech && (
+                    {activeView === 'chat' && liveSpeech && (
                         <div
                             className={`status-bar ${
                                 liveState === 'listening' || liveState === 'speaking' ? 'busy' : ''
@@ -457,7 +556,7 @@ export default function App() {
                             </span>
                         </div>
                     )}
-                    <ChatMessages
+                    {activeView === 'chat' && <ChatMessages
                         messages={messages}
                         busy={busy}
                         tx={tx}
@@ -475,8 +574,8 @@ export default function App() {
                             const text = messageText(userMsg);
                             if (text) void append({ role: 'user', content: text });
                         }}
-                    />
-                    <ChatComposer
+                    />}
+                    {activeView === 'chat' && <ChatComposer
                         tx={tx}
                         input={input}
                         setInput={setInput}
@@ -521,7 +620,8 @@ export default function App() {
                                 usedModels={usedModels}
                             />
                         }
-                    />
+                    />}
+                    <BottomPanel />
                 </main>
             </div>
             <MemoryModal
@@ -582,6 +682,20 @@ export default function App() {
                     void saveMemoryPolicy({ topK: memoryTopKDraft, maxChars: memoryMaxCharsDraft })
                 }
                 onClose={() => setSettingsOpen(false)}
+                activeProfilePersona={activeProfile ? {
+                    avatarEmoji: activeProfile.avatarEmoji,
+                    personality: activeProfile.personality,
+                    voiceStyle: activeProfile.voiceStyle,
+                } : undefined}
+                onSavePersona={async (data) => {
+                    if (!activeProfile?.id) return;
+                    await fetch(`/api/profiles/${activeProfile.id}`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(data),
+                    });
+                    await loadProfiles();
+                }}
             />
         </>
     );

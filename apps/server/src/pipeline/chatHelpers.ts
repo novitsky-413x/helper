@@ -3,6 +3,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
 import { getMemoryWriteStats } from "../mem0Service.js";
+import { getDb } from '../db.js';
 
 export const togetherLlm = createOpenAI({
   baseURL: "https://api.together.xyz/v1",
@@ -161,7 +162,88 @@ export function createUsageSnapshotFinalizer(params: {
       memoryWriteFailTotal: memStats.fail,
       memoryWriteLastOk: typeof extra?.memoryWriteLastOk === "boolean" ? extra.memoryWriteLastOk : null,
     });
+
+    // Persist to SQLite for restart resilience
+    try {
+      const db = getDb();
+      db.prepare(`
+        INSERT INTO usage_snapshots (profileId, resolvedModel, delegatedCategory, messageCount, promptTokens, completionTokens, totalTokens, requestCostUsd, sessionCostUsd, memoryHits, ts)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        params.profileId,
+        extra?.resolvedModel ?? params.selectedModel,
+        params.getDelegatedCategory() ?? null,
+        params.uiMessageCount,
+        promptTokens,
+        completionTokens,
+        totalTokens,
+        requestCostUsd,
+        nextSessionCost,
+        params.memoryHits,
+        new Date().toISOString(),
+      );
+    } catch { /* SQLite may not be ready */ }
   };
+}
+
+/**
+ * On server boot, reload the latest usage snapshot per profile from SQLite
+ * so the analytics panel isn't blank after a restart.
+ */
+export function restoreUsageFromDb(): void {
+  try {
+    const db = getDb();
+    const rows = db.prepare(`
+      SELECT u.profileId, u.resolvedModel, u.delegatedCategory, u.messageCount,
+             u.promptTokens, u.completionTokens, u.totalTokens,
+             u.requestCostUsd, u.sessionCostUsd, u.memoryHits, u.ts
+      FROM usage_snapshots u
+      INNER JOIN (
+        SELECT profileId, MAX(id) AS maxId FROM usage_snapshots GROUP BY profileId
+      ) latest ON u.id = latest.maxId
+    `).all() as Array<{
+      profileId: string | null;
+      resolvedModel: string;
+      delegatedCategory: string | null;
+      messageCount: number;
+      promptTokens: number | null;
+      completionTokens: number | null;
+      totalTokens: number | null;
+      requestCostUsd: number | null;
+      sessionCostUsd: number | null;
+      memoryHits: number | null;
+      ts: string;
+    }>;
+
+    for (const row of rows) {
+      const key = row.profileId ?? '__default__';
+      if (usageByProfile.has(key)) continue;
+      usageByProfile.set(key, {
+        ts: row.ts,
+        resolvedModel: row.resolvedModel,
+        delegatedCategory: row.delegatedCategory ?? undefined,
+        profileId: row.profileId,
+        messageCount: row.messageCount ?? 0,
+        lastUserChars: 0,
+        memoryHits: row.memoryHits ?? 0,
+        memoryBlockChars: 0,
+        promptTokens: row.promptTokens,
+        completionTokens: row.completionTokens,
+        totalTokens: row.totalTokens,
+        requestCostUsd: row.requestCostUsd,
+        sessionCostUsd: row.sessionCostUsd,
+        memoryWriteOkTotal: 0,
+        memoryWriteFailTotal: 0,
+        memoryWriteLastOk: null,
+      });
+      if (typeof row.sessionCostUsd === 'number') {
+        sessionCostByProfile.set(key, row.sessionCostUsd);
+      }
+    }
+    logger.info({ restored: rows.length }, 'usage snapshots restored from DB');
+  } catch (e) {
+    logger.warn({ err: e }, 'failed to restore usage snapshots from DB');
+  }
 }
 
 export function buildVisionMessages(

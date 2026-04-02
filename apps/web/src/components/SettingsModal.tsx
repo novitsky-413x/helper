@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { ProfileRow } from "./ProfileRow";
 import type { UiLang, UiText } from "../i18n/uiText";
 import type { ModelHealthEntry } from "../types/appTypes";
@@ -17,6 +18,31 @@ function HealthDot({ entry }: { entry: ModelHealthEntry | undefined }) {
   }
   const errHint = entry.error ? `: ${entry.error.slice(0, 100)}` : "";
   return <span className="health-dot unavailable" title={`Unavailable${errHint}`} />;
+}
+
+type PersonaData = { avatarEmoji?: string; personality?: string; voiceStyle?: string };
+
+function PersonaEditForm({ initial, onSave }: { initial: PersonaData; onSave: (data: PersonaData) => void }) {
+  const [personaEdit, setPersonaEdit] = useState({
+    avatarEmoji: initial.avatarEmoji ?? '🤖',
+    personality: initial.personality ?? '',
+    voiceStyle: initial.voiceStyle ?? '',
+  });
+
+  return (
+    <>
+      <h3 className="settings-subheading">🎭 Profile Persona</h3>
+      <div className="persona-form">
+        <label className="persona-label">Avatar</label>
+        <input className="persona-input" placeholder="🤖" value={personaEdit.avatarEmoji} onChange={(e) => setPersonaEdit(f => ({...f, avatarEmoji: e.target.value}))} />
+        <label className="persona-label">Voice style</label>
+        <input className="persona-input" placeholder="Friendly, concise..." value={personaEdit.voiceStyle} onChange={(e) => setPersonaEdit(f => ({...f, voiceStyle: e.target.value}))} />
+        <label className="persona-label">Personality</label>
+        <textarea className="persona-input" placeholder="Describe how the agent should behave..." value={personaEdit.personality} onChange={(e) => setPersonaEdit(f => ({...f, personality: e.target.value}))} rows={3} />
+        <button className="small primary" type="button" onClick={() => onSave(personaEdit)}>Save Persona</button>
+      </div>
+    </>
+  );
 }
 
 export function SettingsModal(props: {
@@ -48,6 +74,8 @@ export function SettingsModal(props: {
   setMemoryMaxCharsDraft: (v: number) => void;
   saveMemoryPolicy: () => void;
   onClose: () => void;
+  activeProfilePersona?: PersonaData;
+  onSavePersona: (data: PersonaData) => void;
 }) {
   if (!props.open) return null;
   return (
@@ -109,6 +137,11 @@ export function SettingsModal(props: {
                 </div>
               ))}
             </div>
+
+            <PersonaEditForm
+              initial={props.activeProfilePersona ?? {}}
+              onSave={props.onSavePersona}
+            />
           </section>
           <section className="settings-section">
             <h3 style={{ margin: "0.75rem 0" }}>{props.tx.modelCategories}</h3>

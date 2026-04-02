@@ -5,7 +5,7 @@ import rehypeHighlight from "rehype-highlight";
 import type { UiText } from "../i18n/uiText";
 import { CodeBlock } from "./CodeBlock";
 import { ToolInvocationCard } from "./ToolInvocationCard";
-import { collectReasoning, type ChatMsg, type ChatMessagePart } from "./chatUtils";
+import { collectReasoning, extractThinkBlocks, type ChatMsg, type ChatMessagePart } from "./chatUtils";
 
 const remarkPlugins = [remarkGfm];
 const rehypePlugins = [rehypeHighlight];
@@ -79,7 +79,11 @@ export function ChatMessages(props: {
           {m.role === "assistant" &&
             (() => {
               const parts = (m.parts?.length ? m.parts : null) as Array<Record<string, unknown>> | null;
-              const reasoning = collectReasoning(parts) || (m.id ? props.reasoningByMessageId[m.id] ?? "" : "");
+              let reasoning = collectReasoning(parts) || (m.id ? props.reasoningByMessageId[m.id] ?? "" : "");
+              if (!reasoning && !parts) {
+                const raw = props.messageText(m);
+                reasoning = raw ? extractThinkBlocks(raw).thinking : "";
+              }
               if (!reasoning) return null;
               const isLatestAssistant = idx === props.messages.length - 1;
               const isThinkingNow = isLatestAssistant && props.busy;
@@ -97,7 +101,8 @@ export function ChatMessages(props: {
             const textParts: string[] = [];
             return (m.parts?.length ? m.parts : null)?.map((part: ChatMessagePart, i: number) => {
             if (part.type === "text") {
-              let partText = props.stripAgentArtifacts(part.text ?? "");
+              let partText = extractThinkBlocks(part.text ?? "").cleaned;
+              partText = props.stripAgentArtifacts(partText);
               partText = partText
                 .replace(/!\[[^\]]*?\]\([^)]+\)/g, "")
                 .replace(/\[Open original\]\([^)]+\)/gi, "")
@@ -137,9 +142,13 @@ export function ChatMessages(props: {
             return null;
           });
           })() ??
-            (props.messageText(m) ? (
-              <MemoMessageMarkdown text={props.stripAgentArtifacts(props.messageText(m))} />
-            ) : null)}
+            (() => {
+              const raw = props.messageText(m);
+              if (!raw) return null;
+              const { cleaned } = extractThinkBlocks(raw);
+              const final = props.stripAgentArtifacts(cleaned);
+              return final ? <MemoMessageMarkdown text={final} /> : null;
+            })()}
           {m.role === "assistant" && idx === lastAssistantIdx && !props.busy && props.onRegenerate && (
             <button
               type="button"

@@ -325,6 +325,7 @@ export function useBackendData(params: {
     moveCategoryModel,
     saveMemoryPolicy,
     removeProfile,
+    loadProfiles,
     saveMemory,
     removeMemory,
     saveMcp,

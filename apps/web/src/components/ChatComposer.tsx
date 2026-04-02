@@ -1,5 +1,16 @@
-import { useRef } from "react";
+import { useState } from "react";
 import type { UiText } from "../i18n/uiText";
+
+const SLASH_COMMANDS = [
+    { cmd: '/compact', desc: 'Compact conversation context' },
+    { cmd: '/dream', desc: 'Trigger memory consolidation' },
+    { cmd: '/persona', desc: 'Switch agent persona' },
+    { cmd: '/tasks', desc: 'List current agent tasks' },
+    { cmd: '/learn', desc: 'Create a learning plan' },
+    { cmd: '/wiki', desc: 'Search or create wiki articles' },
+    { cmd: '/autopilot', desc: 'Autopilot status / toggle mode' },
+    { cmd: '/context', desc: 'Show context window usage' },
+];
 
 export function ChatComposer(props: {
   tx: UiText;
@@ -23,6 +34,24 @@ export function ChatComposer(props: {
   imageInputRef: React.RefObject<HTMLInputElement | null>;
 }) {
   const { tx, input, busy, liveSpeech, recordingEnabled, voiceInterim } = props;
+
+  const [showSlashMenu, setShowSlashMenu] = useState(false);
+  const [slashFilter, setSlashFilter] = useState('');
+
+  const filteredCommands = SLASH_COMMANDS.filter((c) =>
+    c.cmd.startsWith(slashFilter.toLowerCase())
+  );
+
+  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    props.handleInputChange(e);
+    const val = e.target.value;
+    if (val.startsWith('/') && !val.includes(' ')) {
+      setShowSlashMenu(true);
+      setSlashFilter(val);
+    } else {
+      setShowSlashMenu(false);
+    }
+  };
 
   return (
     <div className="composer">
@@ -58,6 +87,7 @@ export function ChatComposer(props: {
               onClick={() => {
                 props.setPendingImageDataUrl("");
                 props.setPendingImageName("");
+                // eslint-disable-next-line react-hooks/immutability
                 if (props.imageInputRef.current) props.imageInputRef.current.value = "";
               }}
             >
@@ -73,11 +103,29 @@ export function ChatComposer(props: {
         </div>
       )}
       {props.analyticsSection}
+      {showSlashMenu && filteredCommands.length > 0 && (
+        <div className="slash-menu">
+          {filteredCommands.map((c) => (
+            <button
+              key={c.cmd}
+              className="slash-menu-item"
+              type="button"
+              onClick={() => {
+                props.setInput(c.cmd + ' ');
+                setShowSlashMenu(false);
+              }}
+            >
+              <span className="slash-cmd">{c.cmd}</span>
+              <span className="slash-desc">{c.desc}</span>
+            </button>
+          ))}
+        </div>
+      )}
       <form onSubmit={props.onSubmit}>
         <div className="composer-input-wrap">
           <textarea
             value={input}
-            onChange={props.handleInputChange}
+            onChange={handleChange}
             placeholder={tx.messagePlaceholder}
             rows={2}
             onKeyDown={(e) => {

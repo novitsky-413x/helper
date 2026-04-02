@@ -1,243 +1,92 @@
-import { generateText } from "ai";
 import type { CoreMessage } from "ai";
-import { togetherLlm } from "./chatHelpers.js";
-import { config } from "../config.js";
-import { logger } from "../logger.js";
-import { sanitizeConversation } from "./messageQuality.js";
 
-function estimateTokens(text: string): number {
-  if (!text) return 0;
-  return Math.ceil(text.length / 3.5);
+const DEFAULT_CONTEXT_WINDOW = 8192;
+const RESERVE_OUTPUT_TOKENS = 2048;
+
+export function getModelContextWindow(
+  modelId: string,
+  models: Array<{ id: string; context_length?: number | null }>,
+): number {
+  const m = models.find((mod) => mod.id === modelId);
+  return m?.context_length ?? DEFAULT_CONTEXT_WINDOW;
 }
 
 function estimateMessageTokens(msg: CoreMessage): number {
-  const overhead = 4;
   if (typeof msg.content === "string") {
-    return overhead + estimateTokens(msg.content);
+    return Math.ceil(msg.content.length / 3.5) + 4;
   }
   if (Array.isArray(msg.content)) {
-    let total = overhead;
-    for (const part of msg.content) {
-      if ("text" in part && typeof part.text === "string") {
-        total += estimateTokens(part.text);
-      } else {
-        total += 85;
-      }
+    let chars = 0;
+    for (const part of msg.content as any[]) {
+      if (typeof part === "string") chars += part.length;
+      else if (part?.text) chars += String(part.text).length;
+      else if (part?.result) chars += String(part.result).length;
+      else chars += JSON.stringify(part).length;
     }
-    return total;
+    return Math.ceil(chars / 3.5) + 4;
   }
-  return overhead;
+  return 10;
 }
 
-/**
- * Group messages into atomic blocks that must not be split.
- * An assistant message followed by tool results (and an optional
- * continuation assistant message) forms one indivisible block.
- * Splitting these would orphan tool-result messages and cause
- * "Input validation error" from OpenAI-compatible APIs.
- */
-function groupIntoAtomicBlocks(messages: CoreMessage[]): CoreMessage[][] {
-  const blocks: CoreMessage[][] = [];
-  let i = 0;
-
-  while (i < messages.length) {
-    const msg = messages[i];
-
-    if (msg.role === "assistant") {
-      const block: CoreMessage[] = [msg];
-      i++;
-      // Absorb all subsequent tool-result messages
-      while (i < messages.length && messages[i].role === "tool") {
-        block.push(messages[i]);
-        i++;
-      }
-      // If we absorbed tool messages and next is assistant (continuation), include it
-      if (block.length > 1 && i < messages.length && messages[i].role === "assistant") {
-        block.push(messages[i]);
-        i++;
-      }
-      blocks.push(block);
-    } else {
-      blocks.push([msg]);
-      i++;
-    }
-  }
-
-  return blocks;
+export function estimateTotalTokens(messages: CoreMessage[]): number {
+  return messages.reduce((sum, m) => sum + estimateMessageTokens(m), 0);
 }
 
-function blockTokens(block: CoreMessage[]): number {
-  return block.reduce((sum, m) => sum + estimateMessageTokens(m), 0);
-}
-
-export function estimateTotalTokens(messages: CoreMessage[], systemPrompt: string): number {
-  let total = estimateTokens(systemPrompt) + 4;
-  for (const msg of messages) {
-    total += estimateMessageTokens(msg);
-  }
-  return total;
-}
-
-export type ContextBudgetResult = {
-  messages: CoreMessage[];
-  /** Fraction of the original conversation that had to be dropped (0..1). */
-  dropRatio: number;
-  /** Estimated tokens of the full (sanitised) conversation before trimming. */
-  fullConversationTokens: number;
-  /** The context window that was used for budgeting. */
-  contextWindow: number;
-};
-
-/**
- * Trims messages to fit within the context window budget.
- * Keeps system + first block + last N blocks.
- * Uses atomic blocks so tool-call chains are never split.
- */
 export async function trimToContextBudget(params: {
   messages: CoreMessage[];
   systemTokens: number;
   contextWindow: number;
-  reserveForCompletion?: number;
-}): Promise<ContextBudgetResult> {
-  const { messages: rawMessages, systemTokens, contextWindow, reserveForCompletion = 2000 } = params;
+}): Promise<{ messages: CoreMessage[]; trimmed: boolean; dropRatio: number }> {
+  const { messages, systemTokens, contextWindow } = params;
+  const budget = contextWindow - RESERVE_OUTPUT_TOKENS - systemTokens;
+  if (budget <= 0) {
+    return { messages: messages.slice(-2), trimmed: true, dropRatio: 1 };
+  }
 
-  const messages = sanitizeConversation(rawMessages);
-  const budget = contextWindow - systemTokens - reserveForCompletion;
-
+  const originalCount = messages.length;
   let totalTokens = 0;
   for (const msg of messages) {
     totalTokens += estimateMessageTokens(msg);
   }
 
-  if (budget <= 0) {
-    return {
-      messages: messages.slice(-2),
-      dropRatio: messages.length > 2 ? 1 : 0,
-      fullConversationTokens: totalTokens,
-      contextWindow,
-    };
-  }
-
   if (totalTokens <= budget) {
-    return { messages, dropRatio: 0, fullConversationTokens: totalTokens, contextWindow };
+    return { messages, trimmed: false, dropRatio: 0 };
   }
 
-  // Work with atomic blocks to avoid splitting tool-call chains
-  const blocks = groupIntoAtomicBlocks(messages);
+  const kept: CoreMessage[] = [];
+  let keptTokens = 0;
 
-  const keepFirstBlocks = Math.min(1, blocks.length);
-  const firstBlocks = blocks.slice(0, keepFirstBlocks);
-  const firstMessages = firstBlocks.flat();
-  const firstTokens = blockTokens(firstMessages);
-
-  const remaining = blocks.slice(keepFirstBlocks);
-  const recentBudget = budget - firstTokens - 200;
-
-  const recentBlocks: CoreMessage[][] = [];
-  let recentTokenCount = 0;
-  for (let i = remaining.length - 1; i >= 0; i--) {
-    const bt = blockTokens(remaining[i]);
-    if (recentTokenCount + bt > recentBudget) break;
-    recentBlocks.unshift(remaining[i]);
-    recentTokenCount += bt;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const tokens = estimateMessageTokens(messages[i]!);
+    if (keptTokens + tokens > budget) break;
+    kept.unshift(messages[i]!);
+    keptTokens += tokens;
   }
 
-  const recentMessages = recentBlocks.flat();
-  const droppedBlockCount = remaining.length - recentBlocks.length;
-  const droppedMessages = remaining.slice(0, droppedBlockCount).flat();
-  const dropRatio = messages.length > 0 ? droppedMessages.length / messages.length : 0;
-
-  if (droppedMessages.length > 0) {
-    const summary = await summarizeMessages(droppedMessages);
-    if (summary) {
-      return {
-        messages: [
-          ...firstMessages,
-          { role: "assistant" as const, content: `[Earlier conversation summary: ${summary}]` },
-          ...recentMessages,
-        ],
-        dropRatio,
-        fullConversationTokens: totalTokens,
-        contextWindow,
-      };
-    }
+  if (kept.length === 0 && messages.length > 0) {
+    kept.push(messages[messages.length - 1]!);
   }
 
-  return {
-    messages: [...firstMessages, ...recentMessages],
-    dropRatio,
-    fullConversationTokens: totalTokens,
-    contextWindow,
-  };
+  const dropped = originalCount - kept.length;
+  const dropRatio = originalCount > 0 ? dropped / originalCount : 0;
+
+  return { messages: kept, trimmed: true, dropRatio };
 }
 
-async function summarizeMessages(messages: CoreMessage[]): Promise<string | null> {
-  if (messages.length === 0) return null;
-
-  const text = messages
-    .map((m) => {
-      const content = typeof m.content === "string" ? m.content : "[complex content]";
-      return `${m.role}: ${content.slice(0, 200)}`;
-    })
-    .join("\n");
-
-  try {
-    const result = await generateText({
-      model: togetherLlm(config.togetherBaseModel),
-      temperature: 0,
-      maxTokens: 150,
-      prompt: `Summarize this conversation excerpt in 1-2 sentences, preserving key facts and decisions:\n\n${text.slice(0, 2000)}`,
-    });
-    return result.text?.trim() || null;
-  } catch (e) {
-    logger.warn({ err: e }, "context summarization failed");
-    return null;
-  }
-}
-
-export function getModelContextWindow(
-  modelId: string,
-  catalogModels: Array<{ id: string; context_length?: number | null }>
-): number {
-  const model = catalogModels.find((m) => m.id === modelId);
-  return model?.context_length ?? 8192;
-}
-
-/**
- * Find a routable model with a larger context window than the current one.
- * Returns null if no suitable upgrade exists.
- */
 export function findLargerContextModel(
-  currentModelId: string,
-  currentContextWindow: number,
-  catalogModels: Array<{ id: string; context_length?: number | null; type?: string; pricing?: { input?: number | null } | null }>,
-  isModelAvailable: (id: string) => boolean,
+  currentModel: string,
+  currentContext: number,
+  models: Array<{ id: string; context_length?: number | null }>,
+  isHealthy: (id: string) => boolean,
 ): string | null {
-  const chatModels = catalogModels.filter(
-    (m) => (m.type === "chat" || m.type === "language" || m.type === "code") && m.id !== currentModelId
-  );
-
-  const candidates = chatModels
-    .filter((m) => (m.context_length ?? 0) > currentContextWindow && isModelAvailable(m.id))
-    .sort((a, b) => {
-      const ctxDiff = (a.context_length ?? 0) - (b.context_length ?? 0);
-      if (ctxDiff !== 0) return ctxDiff;
-      const pa = a.pricing?.input ?? 999;
-      const pb = b.pricing?.input ?? 999;
-      return pa - pb;
-    });
-
-  const picked = candidates[0];
-  if (!picked) return null;
-
-  logger.info(
-    {
-      from: currentModelId,
-      fromCtx: currentContextWindow,
-      to: picked.id,
-      toCtx: picked.context_length,
-    },
-    "context escalation: switching to larger-context model"
-  );
-  return picked.id;
+  const candidates = models
+    .filter(
+      (m) =>
+        m.id !== currentModel &&
+        typeof m.context_length === "number" &&
+        m.context_length > currentContext * 1.5 &&
+        isHealthy(m.id),
+    )
+    .sort((a, b) => (a.context_length ?? 0) - (b.context_length ?? 0));
+  return candidates[0]?.id ?? null;
 }

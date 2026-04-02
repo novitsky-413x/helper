@@ -231,6 +231,8 @@ async function isDuplicateMemory(m: Mem0Memory, userId: string, text: string): P
   }
 }
 
+const MAX_MEMORY_TEXT_CHARS = 1200;
+
 export async function addConversationToMemory(
   userId: string,
   userContent: string,
@@ -257,35 +259,30 @@ export async function addConversationToMemory(
     return true;
   }
 
+  let textForAdd = fallback;
+  if (fallback.length > MAX_MEMORY_TEXT_CHARS) {
+    textForAdd = fallback.slice(0, MAX_MEMORY_TEXT_CHARS);
+    logger.debug(
+      { userId, originalChars: fallback.length, truncatedChars: textForAdd.length },
+      "mem0 add: truncated fallback before embed"
+    );
+  }
+
   try {
-    await m.add(fallback, { userId, infer: true });
+    await m.add(textForAdd, { userId, infer: false });
     memoryListCache.delete(userId);
     memoryWriteOkCount += 1;
-    logger.debug({ userId, chars: fallback.length }, "mem0 add succeeded (infer=true)");
+    logger.debug({ userId, chars: textForAdd.length }, "mem0 add succeeded");
     return true;
-  } catch (inferErr) {
-    logger.warn(
-      { err: inferErr, userId, textPreview: fallback.slice(0, 120) },
-      "mem0 add with infer=true failed, retrying with infer=false"
+  } catch (e) {
+    memoryWriteFailCount += 1;
+    logger.error(
+      { err: e, userId, textPreview: textForAdd.slice(0, 120) },
+      "mem0 add failed"
     );
-    try {
-      await m.add(fallback, { userId, infer: false });
-      memoryListCache.delete(userId);
-      memoryWriteOkCount += 1;
-      logger.debug({ userId, chars: fallback.length }, "mem0 add succeeded (infer=false fallback)");
-      return true;
-    } catch (e) {
-      memoryWriteFailCount += 1;
-      logger.error(
-        { err: e, userId, textPreview: fallback.slice(0, 120) },
-        "mem0 add failed (both infer=true and infer=false)"
-      );
-      return false;
-    }
+    return false;
   }
 }
-
-const MAX_MEMORY_TEXT_CHARS = 1800;
 
 function sanitizeMemoryText(input: string): string {
   const s = stripModelArtifacts(String(input ?? "").trim());

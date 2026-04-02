@@ -7,6 +7,9 @@ import {
 } from "./chatHelpers.js";
 import { markModelUnhealthy, isModelHealthy } from "../modelHealth.js";
 
+/** Together / routing: this id returns model_not_available; skip so first attempt is useful. */
+const LEGACY_UNAVAILABLE_IMAGE_MODEL_ID = "stable-diffusion";
+
 export async function buildImageEditPromptFromContext(params: {
   uiMessages: Array<{ role: string; content?: unknown; parts?: Array<Record<string, unknown>> }>;
   userInstruction: string;
@@ -58,7 +61,15 @@ export async function generateImageMarkdown(params: {
   const prioritized = params.preferredModel?.trim()
     ? [params.preferredModel.trim(), ...params.candidateModels]
     : params.candidateModels;
-  const candidates = [...new Set(prioritized)].filter(
+  const deduped = [...new Set(prioritized)];
+  const withoutLegacy = deduped.filter((id) => {
+    if (id.trim().toLowerCase() === LEGACY_UNAVAILABLE_IMAGE_MODEL_ID) {
+      logger.info({ model: id }, "image gen: skipped legacy/unavailable model id");
+      return false;
+    }
+    return true;
+  });
+  const candidates = withoutLegacy.filter(
     (id) => !isModelTemporarilyUnavailable(id) && isModelHealthy(id),
   );
 

@@ -8,6 +8,7 @@ import { MongoClient, type Collection, type Db, type OptionalId } from "mongodb"
 import { config } from "./config.js";
 import type { ProfileModelPreferences, ModelSelectionPolicy } from "./modelCatalog.js";
 import { memoryDeleteAllForUser } from "./mem0Service.js";
+import { getDb } from './db.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = path.resolve(__dirname, "../data");
@@ -23,6 +24,11 @@ export type MemoryProfile = {
   memoryPins?: string[];
   createdAt: string;
   updatedAt: string;
+  avatarEmoji?: string;
+  personality?: string;
+  voiceStyle?: string;
+  systemPromptMode?: "replace" | "append" | "prepend";
+  customSystemPrompt?: string;
 };
 
 export type McpTransport = "http" | "stdio";
@@ -96,6 +102,7 @@ function ensureDefaultProfile(profiles: MemoryProfile[]): MemoryProfile[] {
     memoryPins: [],
     memoryPolicy: {},
     modelPreferences: { categories: {}, updatedAt: now },
+    avatarEmoji: "🤖",
     createdAt: now,
     updatedAt: now,
   };
@@ -151,10 +158,23 @@ export async function updateProfile(
     modelPreferences?: ProfileModelPreferences;
     memoryPolicy?: Partial<ModelSelectionPolicy>;
     memoryPins?: string[];
+    avatarEmoji?: string;
+    personality?: string;
+    voiceStyle?: string;
+    systemPromptMode?: "replace" | "append" | "prepend";
+    customSystemPrompt?: string;
   }
 ): Promise<MemoryProfile | null> {
   const c = await colProfiles();
   const now = new Date().toISOString();
+
+  const personaPatch: Record<string, unknown> = {};
+  if (patch.avatarEmoji !== undefined) personaPatch.avatarEmoji = patch.avatarEmoji;
+  if (patch.personality !== undefined) personaPatch.personality = patch.personality;
+  if (patch.voiceStyle !== undefined) personaPatch.voiceStyle = patch.voiceStyle;
+  if (patch.systemPromptMode !== undefined) personaPatch.systemPromptMode = patch.systemPromptMode;
+  if (patch.customSystemPrompt !== undefined) personaPatch.customSystemPrompt = patch.customSystemPrompt;
+
   if (c) {
     const cur = await c.findOne({ id });
     if (!cur) return null;
@@ -164,6 +184,7 @@ export async function updateProfile(
       ...(patch.modelPreferences ? { modelPreferences: patch.modelPreferences } : {}),
       ...(patch.memoryPolicy ? { memoryPolicy: patch.memoryPolicy } : {}),
       ...(patch.memoryPins ? { memoryPins: patch.memoryPins } : {}),
+      ...personaPatch,
       updatedAt: now,
     };
     await c.replaceOne({ id }, next);
@@ -178,6 +199,7 @@ export async function updateProfile(
     ...(patch.modelPreferences ? { modelPreferences: patch.modelPreferences } : {}),
     ...(patch.memoryPolicy ? { memoryPolicy: patch.memoryPolicy } : {}),
     ...(patch.memoryPins ? { memoryPins: patch.memoryPins } : {}),
+    ...personaPatch,
     updatedAt: now,
   };
   await writeJson(profilesPath(), f);
@@ -202,6 +224,18 @@ export async function deleteProfile(id: string): Promise<boolean> {
   }
   if (mem0UserId) {
     await memoryDeleteAllForUser(mem0UserId);
+  }
+  // Cascade delete from SQLite tables
+  try {
+    const db = getDb();
+    db.prepare('DELETE FROM chat_sessions WHERE profileId = ?').run(id);
+    db.prepare('DELETE FROM agent_tasks WHERE profileId = ?').run(id);
+    db.prepare('DELETE FROM agent_sessions WHERE profileId = ?').run(id);
+    db.prepare('DELETE FROM learning_plans WHERE profileId = ?').run(id);
+    db.prepare('DELETE FROM wiki_articles WHERE profileId = ?').run(id);
+    db.prepare('DELETE FROM autopilot_scheduled_tasks WHERE profileId = ?').run(id);
+  } catch (e) {
+    // SQLite may not be initialized yet during tests
   }
   return true;
 }

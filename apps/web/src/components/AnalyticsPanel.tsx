@@ -1,4 +1,5 @@
 import type { UiText } from "../i18n/uiText";
+import type { UsageSnapshot } from "@helper/shared";
 
 export function AnalyticsPanel(props: {
   analyticsOpen: boolean;
@@ -14,7 +15,7 @@ export function AnalyticsPanel(props: {
   riskLevel: string;
   usageOwnerLabel: string;
   usageStatus: "loading" | "empty" | "current" | "stale";
-  lastUsage: any;
+  lastUsage: UsageSnapshot | null;
   prettyNum: (n: number) => string;
   requestCostUsd: number | null;
   memoryRowsLen: number;

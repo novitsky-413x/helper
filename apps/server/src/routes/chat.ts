@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
     streamText,
@@ -59,12 +60,17 @@ import { buildImageEditPromptFromContext, generateImageMarkdown } from '../pipel
 import { generateAudio, getAudioFile } from '../pipeline/audioRoute.js';
 import { generateVisionReply } from '../pipeline/visionRoute.js';
 import { buildAgentSystemPrompt, detectUserLanguage } from '../pipeline/agentPrompt.js';
+import { getToolMap, buildAIToolSet } from '../tools/index.js';
+import type { ToolContext } from '../tools/buildTool.js';
+import { getIO } from '../socketServer.js';
 import {
     trimToContextBudget,
     estimateTotalTokens,
     getModelContextWindow,
     findLargerContextModel,
 } from '../pipeline/contextManager.js';
+import { runAgentLoop } from '../agentLoop.js';
+import { sanitizeCoreMessages } from '../pipeline/sanitize.js';
 
 const router = Router();
 
@@ -72,6 +78,7 @@ const ChatBody = z.object({
     messages: z.array(z.unknown()),
     model: z.string().optional(),
     profileId: z.string().optional(),
+    agentMode: z.boolean().optional(),
 });
 
 router.get('/models', async (_req, res) => {
@@ -182,8 +189,28 @@ router.post('/chat', async (req, res) => {
         return;
     }
 
-    const { messages, model: requestedModel, profileId } = parsed.data;
+    const { messages, model: requestedModel, profileId, agentMode } = parsed.data;
     const uiMessages = messages as Message[];
+
+    // --- Slash command interception ---
+    const lastUserMsg = uiMessages.filter(m => m.role === 'user').at(-1);
+    const lastUserRaw = typeof lastUserMsg?.content === 'string' ? lastUserMsg.content : '';
+    if (lastUserRaw.trim().startsWith('/')) {
+        const { parseSlashCommand, handleSlashCommand } = await import('../services/slashCommands.js');
+        const cmd = parseSlashCommand(lastUserRaw);
+        if (cmd) {
+            const result = await handleSlashCommand(cmd.command, cmd.args, profileId ?? undefined);
+            if (result.handled) {
+                pipeDataStreamToResponse(res, {
+                    execute: async (dataStream) => {
+                        dataStream.write(formatDataStreamPart('text', result.response ?? 'Command executed.'));
+                    },
+                });
+                return;
+            }
+        }
+    }
+
     const autoRequested = !requestedModel || requestedModel === 'auto';
 
     const lastUserText = lastUserTextFromMessages(
@@ -691,6 +718,7 @@ ${task}`,
             hasPriorAssistantImage: !!priorAssistantImageUrl,
             date: new Date(),
             userLanguage: detectUserLanguage(lastUserText),
+            profile: profile ?? null,
         });
 
         // Filter out assistant messages with incomplete tool invocations (state: "call" without result).
@@ -707,7 +735,7 @@ ${task}`,
             return true;
         });
 
-        const rawCore = convertToCoreMessages(cleanedUiMessages);
+        const rawCore = sanitizeCoreMessages(convertToCoreMessages(cleanedUiMessages));
         let effectiveModel = selectedModel;
 
         // When the user has a memory profile, ALWAYS upgrade to a capable model.
@@ -773,14 +801,79 @@ ${task}`,
         }
         const core = budgetResult.messages;
 
+        // Build agent tool set (bash, file, web search, learning, wiki, todo)
+        const toolContext: ToolContext = {
+            profileId: mem0UserId ?? profileId ?? undefined,
+            agentSessionId: undefined,
+            emitProgress: () => {},
+            io: getIO(),
+            workingDirectory: config.agentWorkspace,
+        };
+        const builtToolMap = getToolMap();
+        // Remove tools that are already defined inline (manage_memory, delegate_to_category)
+        builtToolMap.delete('manage_memory');
+        builtToolMap.delete('delegate_to_category');
+        const agentTools = buildAIToolSet(builtToolMap, toolContext);
+
+        // --- Agent Loop opt-in ---
+        if (agentMode) {
+            const agentSessionId = randomUUID();
+            pipeDataStreamToResponse(res, {
+                execute: async (dataStream) => {
+                    const loopResult = await runAgentLoop({
+                        sessionId: agentSessionId,
+                        profileId: mem0UserId ?? profileId ?? undefined,
+                        mem0UserId: mem0UserId ?? undefined,
+                        model: effectiveModel,
+                        system,
+                        messages: cleanedUiMessages as Message[],
+                        mcpServers: mcpRows,
+                        catalogModels: catalog.models,
+                        maxTurns: config.maxToolRounds ?? 16,
+                        onText: (chunk) => {
+                            dataStream.write(formatDataStreamPart('text', chunk));
+                        },
+                    });
+                    if (loopResult.status === 'error' && !loopResult.text) {
+                        dataStream.write(
+                            formatDataStreamPart(
+                                'text',
+                                '\n\n⚠️ Agent loop завершился с ошибкой. Попробуйте повторить запрос или сменить модель.',
+                            ),
+                        );
+                    }
+
+                    // Write memory for agent mode (same as non-agent onFinish)
+                    let memoryWriteLastOk: boolean | null = null;
+                    if (mem0UserId && lastUserText && loopResult.text) {
+                        try {
+                            memoryWriteLastOk = await addConversationToMemory(mem0UserId, lastUserText, loopResult.text);
+                        } catch (e) {
+                            memoryWriteLastOk = false;
+                            logger.warn({ err: e, mem0UserId }, 'mem0 addConversation failed (agent mode)');
+                        }
+                    }
+
+                    finalizeUsage({
+                        resolvedModel: effectiveModel,
+                        promptTokens: null,
+                        completionTokens: null,
+                        totalTokens: loopResult.totalTokens || null,
+                        memoryWriteLastOk,
+                    });
+                },
+            });
+            return;
+        }
+
         const result = streamText({
             model: togetherLlm(effectiveModel),
             system,
             messages: core,
             maxSteps: config.maxToolRounds,
-            tools: { ...mcpTools, ...delegateTool, ...imageTools, ...audioTools, ...memoryTools },
+            tools: { ...agentTools, ...mcpTools, ...delegateTool, ...imageTools, ...audioTools, ...memoryTools },
             toolChoice:
-                (likelyImageRequest || likelyImageEditRequest || likelyPriorImageFollowupEdit) && !mem0UserId
+                (likelyImageRequest || likelyImageEditRequest || likelyPriorImageFollowupEdit)
                     ? { type: 'tool', toolName: 'generate_image' }
                     : 'auto',
             experimental_repairToolCall: async ({ toolCall }) => {

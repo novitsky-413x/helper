@@ -1,7 +1,7 @@
 import express from "express";
 import cors from "cors";
 import path from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { type IncomingMessage, type ServerResponse } from "node:http";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
@@ -11,13 +11,36 @@ import { refreshModelCatalog } from "./modelCatalog.js";
 import { runStartupHealthCheck } from "./modelHealth.js";
 import { disconnectAllMcp } from "./mcpRuntime.js";
 import { persistVectorStore, restoreVectorStore } from "./mem0Service.js";
+import { getDb } from "./db.js";
+import { registerShutdownHooks, runStartupRecovery, isShuttingDown } from "./lifecycle.js";
+import { initSocketServer, closeSocketServer } from "./socketServer.js";
+import { initAutoDream } from "./services/autoDream/index.js";
+import { initAutopilot } from "./services/autopilot/index.js";
+import { restoreUsageFromDb } from "./pipeline/chatHelpers.js";
 
 import chatRouter from "./routes/chat.js";
 import profilesRouter from "./routes/profiles.js";
 import memoryRouter from "./routes/memory.js";
 import mcpRouter from "./routes/mcp.js";
+import chatSessionsRouter from "./routes/chatSessions.js";
+import tasksRouter from "./routes/tasks.js";
+import dreamRouter from "./routes/dream.js";
+import autopilotRouter from "./routes/autopilot.js";
+import learningRouter from "./routes/learning.js";
+import wikiRouter from "./routes/wiki.js";
+import modelEvalRouter from "./routes/modelEval.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// --- Ensure agent workspace dir exists ---
+if (!existsSync(config.agentWorkspace)) {
+  mkdirSync(config.agentWorkspace, { recursive: true });
+}
+
+// --- SQLite init + startup recovery (before HTTP) ---
+getDb();
+runStartupRecovery();
+restoreUsageFromDb();
 
 const app = express();
 app.use(
@@ -42,14 +65,29 @@ app.use(
   })
 );
 
+app.use((_req, res, next) => {
+  if (isShuttingDown()) {
+    res.status(503).json({ error: "Server is shutting down" });
+    return;
+  }
+  next();
+});
+
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true });
+  res.json({ ok: true, shutting_down: isShuttingDown() });
 });
 
 app.use("/api", chatRouter);
 app.use("/api/profiles", profilesRouter);
 app.use("/api/memory", memoryRouter);
 app.use("/api/mcp", mcpRouter);
+app.use("/api/chat-sessions", chatSessionsRouter);
+app.use("/api/tasks", tasksRouter);
+app.use("/api/dream", dreamRouter);
+app.use("/api/autopilot", autopilotRouter);
+app.use("/api/learning", learningRouter);
+app.use("/api/wiki", wikiRouter);
+app.use("/api/model-eval", modelEvalRouter);
 
 const webDist = path.resolve(__dirname, "../../web/dist");
 if (existsSync(webDist)) {
@@ -99,49 +137,24 @@ const httpServer = app.listen(config.port, () => {
   );
 });
 
-let shuttingDown = false;
-async function shutdown(reason: string, exitCode = 0) {
-  if (shuttingDown) return;
-  shuttingDown = true;
-  logger.info({ reason }, "shutdown started");
-  const forceTimer = setTimeout(() => {
-    logger.error({ reason }, "forced shutdown timeout");
-    process.exit(1);
-  }, 8000);
-  forceTimer.unref?.();
-  try {
-    await new Promise<void>((resolve) => {
-      httpServer.close(() => resolve());
-      (httpServer as any).closeIdleConnections?.();
-      (httpServer as any).closeAllConnections?.();
-    });
-    await persistVectorStore();
-    await disconnectAllMcp();
-    logger.info({ reason }, "shutdown completed");
-    clearTimeout(forceTimer);
-    process.exit(exitCode);
-  } catch (e) {
-    logger.error({ err: e, reason }, "shutdown failed");
-    clearTimeout(forceTimer);
-    process.exit(1);
-  }
-}
+// --- Socket.io ---
+initSocketServer(httpServer);
 
-httpServer.on("error", (err) => {
-  logger.fatal({ err }, "HTTP server failed to bind or accept");
-  process.exit(1);
+// --- Lifecycle: shutdown hooks ---
+registerShutdownHooks(httpServer, {
+  persistVectorStore,
+  disconnectAllMcp,
+  socketIoClose: closeSocketServer,
 });
 
-process.on("SIGINT", () => void shutdown("SIGINT", 0));
-process.on("SIGTERM", () => void shutdown("SIGTERM", 0));
-process.on("SIGHUP", () => void shutdown("SIGHUP", 0));
+// --- Background services ---
+initAutoDream();
+initAutopilot();
 
-process.on("uncaughtException", (err) => {
-  logger.fatal({ err }, "uncaught exception");
-  void shutdown("uncaughtException", 1);
-});
-
-process.on("unhandledRejection", (reason) => {
-  logger.fatal({ err: reason }, "unhandled rejection");
-  void shutdown("unhandledRejection", 1);
-});
+// --- Periodic Mem0 vector snapshot (every 5 min) ---
+const vectorSnapshotInterval = setInterval(() => {
+  void persistVectorStore().catch((e) =>
+    logger.warn({ err: e }, "periodic vector snapshot failed")
+  );
+}, 5 * 60 * 1000);
+vectorSnapshotInterval.unref();
