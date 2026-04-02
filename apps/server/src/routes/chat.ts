@@ -79,6 +79,7 @@ const ChatBody = z.object({
     model: z.string().optional(),
     profileId: z.string().optional(),
     agentMode: z.boolean().optional(),
+    uiLang: z.enum(['ru', 'en']).optional(),
 });
 
 router.get('/models', async (_req, res) => {
@@ -189,7 +190,8 @@ router.post('/chat', async (req, res) => {
         return;
     }
 
-    const { messages, model: requestedModel, profileId, agentMode } = parsed.data;
+    const { messages, model: requestedModel, profileId, agentMode, uiLang } = parsed.data;
+    const agentUiLocale = uiLang === 'en' ? 'en' : 'ru';
     const uiMessages = messages as Message[];
 
     // --- Slash command interception ---
@@ -830,17 +832,17 @@ ${task}`,
                         mcpServers: mcpRows,
                         catalogModels: catalog.models,
                         maxTurns: config.maxToolRounds ?? 16,
+                        locale: agentUiLocale,
                         onText: (chunk) => {
                             dataStream.write(formatDataStreamPart('text', chunk));
                         },
                     });
                     if (loopResult.status === 'error' && !loopResult.text) {
-                        dataStream.write(
-                            formatDataStreamPart(
-                                'text',
-                                '\n\n⚠️ Agent loop завершился с ошибкой. Попробуйте повторить запрос или сменить модель.',
-                            ),
-                        );
+                        const errNote =
+                            agentUiLocale === 'en'
+                                ? '\n\n⚠️ The agent loop ended with an error. Try again or switch models.'
+                                : '\n\n⚠️ Agent loop завершился с ошибкой. Попробуйте повторить запрос или сменить модель.';
+                        dataStream.write(formatDataStreamPart('text', errNote));
                     }
 
                     // Write memory for agent mode (same as non-agent onFinish)

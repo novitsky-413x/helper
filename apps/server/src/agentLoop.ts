@@ -21,6 +21,8 @@ import {
 import type { TogetherModelRow } from "./togetherModels.js";
 import { sanitizeCoreMessages, sanitizeControlTokens } from "./pipeline/sanitize.js";
 
+export type AgentUiLocale = "ru" | "en";
+
 export interface AgentLoopParams {
   sessionId: string;
   profileId?: string;
@@ -31,12 +33,34 @@ export interface AgentLoopParams {
   mcpServers: McpServerRecord[];
   catalogModels: TogetherModelRow[];
   maxTurns?: number;
+  /** Streamed footers for max_turns / interrupted match the web UI language when set. */
+  locale?: AgentUiLocale;
   extraTools?: ToolSet;
   abortSignal?: AbortSignal;
   onText?: (chunk: string) => void;
   onToolCall?: (toolName: string, args: unknown) => void;
   onToolResult?: (toolName: string, result: unknown) => void;
   onTurnEnd?: (turn: number, totalTurns: number) => void;
+}
+
+function agentStreamFooters(locale: AgentUiLocale, maxTurns: number) {
+  if (locale === "en") {
+    return {
+      maxTurns: `\n\n⚠️ Agent step limit reached (${maxTurns}). The task may be incomplete — narrow your request or raise MAX_TOOL_ROUNDS on the server.`,
+      interrupted: "\n\n⏹️ Agent execution was stopped.",
+    };
+  }
+  return {
+    maxTurns: `\n\n⚠️ Достигнут лимит шагов агента (${maxTurns}). Задача могла выполниться не полностью — уточните запрос или увеличьте MAX_TOOL_ROUNDS на сервере.`,
+    interrupted: "\n\n⏹️ Выполнение агента остановлено.",
+  };
+}
+
+function agentStreamRecoverError(locale: AgentUiLocale): string {
+  if (locale === "en") {
+    return "An error occurred while processing the request. The model could not invoke tools correctly. Try again or switch models.";
+  }
+  return "Произошла ошибка при обработке запроса. Модель не смогла корректно вызвать инструмент. Попробуйте ещё раз или переключите модель.";
 }
 
 export interface AgentLoopResult {
@@ -57,6 +81,7 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
     mcpServers,
     catalogModels,
     maxTurns = 16,
+    locale = "ru",
     extraTools = {},
     abortSignal,
     onText,
@@ -108,6 +133,7 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
   let totalTokens = 0;
   let finalText = "";
   let status: AgentLoopResult["status"] = "completed";
+  let completedNaturally = false;
 
   try {
     while (turnCount < maxTurns) {
@@ -131,6 +157,7 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
         sessionId,
         turn: turnCount,
         maxTurns,
+        phase: "llm",
       });
 
       const result = await streamText({
@@ -217,7 +244,7 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
       }
 
       if (streamError && toolCalls.length === 0 && !assistantText) {
-        const errMsg = `Произошла ошибка при обработке запроса. Модель не смогла корректно вызвать инструмент. Попробуйте ещё раз или переключите модель.`;
+        const errMsg = agentStreamRecoverError(locale);
         finalText = errMsg;
         onText?.(errMsg);
         status = "error";
@@ -229,6 +256,7 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
 
       if (toolCalls.length === 0) {
         finalText = assistantText;
+        completedNaturally = true;
         break;
       }
 
@@ -249,6 +277,13 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
 
       const toolResults: Array<{type: "tool-result"; toolCallId: string; toolName: string; result: string}> = [];
       for (const tc of toolCalls) {
+        io?.of("/agent").emit("agent:progress", {
+          sessionId,
+          turn: turnCount,
+          maxTurns,
+          phase: "tool",
+          toolName: tc.toolName,
+        });
         const builtTool = builtToolMap.get(tc.toolName);
         let toolResult: string;
         if (builtTool) {
@@ -278,8 +313,19 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
       onTurnEnd?.(turnCount, maxTurns);
     }
 
-    if (turnCount >= maxTurns && status === "completed") {
+    if (!completedNaturally && turnCount >= maxTurns && status === "completed") {
       status = "max_turns";
+    }
+
+    const footers = agentStreamFooters(locale, maxTurns);
+    if (status === "max_turns") {
+      const note = footers.maxTurns;
+      finalText = (finalText || "") + note;
+      onText?.(note);
+    } else if (status === "interrupted") {
+      const note = footers.interrupted;
+      finalText = (finalText || "") + note;
+      onText?.(note);
     }
   } catch (e) {
     logger.error({ err: e, sessionId, turn: turnCount }, "agent loop error");

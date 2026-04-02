@@ -32,3 +32,6 @@ apps/server/logs/
 
 # Agent workspace (runtime files)
 workspace/
+
+# Local agent QA curl captures (regenerate with scripts/agent-qa-*.json)
+scripts/agent-qa-*.txt

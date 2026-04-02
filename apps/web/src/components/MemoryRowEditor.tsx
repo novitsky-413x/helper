@@ -7,12 +7,13 @@ export function MemoryRowEditor(props: {
   onDelete: () => void;
 }) {
   const [text, setText] = useState(props.row.memory);
+  const fieldId = `memory-edit-${props.row.id}`;
   return (
     <div className="memory-item">
       <div className="muted" style={{ fontSize: "0.75rem" }}>
         {props.row.id.slice(0, 12)}… score: {props.row.score?.toFixed?.(3) ?? "—"}
       </div>
-      <textarea className="edit" value={text} onChange={(e) => setText(e.target.value)} />
+      <textarea id={fieldId} name={fieldId} className="edit" value={text} onChange={(e) => setText(e.target.value)} />
       <div className="row">
         <button type="button" className="small primary" onClick={() => props.onSave(text)}>
           {props.labels.update}

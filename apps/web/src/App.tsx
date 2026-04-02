@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { useChat } from '@ai-sdk/react';
 import { useLiveVoice } from './liveVoice/useLiveVoice.ts';
 import { UI_TEXT, type UiLang } from './i18n/uiText';
@@ -16,13 +17,26 @@ import { ChatSessionList } from './components/ChatSessionList';
 import type { TaskCategory } from './types/appTypes';
 import { formatPricePerMillion, useAnalyticsMetrics } from './hooks/useAnalyticsMetrics';
 import { Sidebar } from './components/Sidebar';
-import { BottomPanel } from './components/BottomPanel';
 import { NotificationToast } from './components/NotificationToast';
-import { AutopilotPanel } from './components/AutopilotPanel';
-import { LearningDashboard } from './components/LearningDashboard';
-import { WikiBrowser } from './components/WikiBrowser';
 import { useAppStore } from './store/index.js';
 import './App.css';
+
+const LearningDashboard = lazy(async () => {
+    const m = await import('./components/LearningDashboard');
+    return { default: m.LearningDashboard };
+});
+const WikiBrowser = lazy(async () => {
+    const m = await import('./components/WikiBrowser');
+    return { default: m.WikiBrowser };
+});
+const AutopilotPanel = lazy(async () => {
+    const m = await import('./components/AutopilotPanel');
+    return { default: m.AutopilotPanel };
+});
+const BottomPanel = lazy(async () => {
+    const m = await import('./components/BottomPanel');
+    return { default: m.BottomPanel };
+});
 
 const LS_UI_LANG = 'helper-ui-lang';
 const LS_PROFILE_VOICE_MAP = 'helper-profile-voice-map';
@@ -94,6 +108,30 @@ export default function App() {
         return stored === 'ru' || stored === 'en' ? stored : 'ru';
     });
     const tx = UI_TEXT[uiLang];
+    const addNotification = useAppStore((s) => s.addNotification);
+    const onProfileAddFailed = useCallback(() => {
+        const t = UI_TEXT[uiLang];
+        addNotification({
+            id: crypto.randomUUID(),
+            type: 'error',
+            title: t.profileAddFailedTitle,
+            body: t.profileAddFailedBody,
+            ttl: 8000,
+            createdAt: Date.now(),
+        });
+    }, [addNotification, uiLang]);
+
+    const notifyGenericFailed = useCallback(() => {
+        const t = UI_TEXT[uiLang];
+        addNotification({
+            id: crypto.randomUUID(),
+            type: 'error',
+            title: t.genericRequestFailedTitle,
+            body: t.genericRequestFailedBody,
+            ttl: 7000,
+            createdAt: Date.now(),
+        });
+    }, [addNotification, uiLang]);
 
     const {
         models,
@@ -134,6 +172,9 @@ export default function App() {
         profileDeleteConfirm: tx.profileDeleteConfirm,
         memoryDeleteConfirm: tx.memoryDeleteConfirm,
         mcpDeleteConfirm: tx.mcpDeleteConfirm,
+        onProfileAddFailed,
+        onMcpSaveFailed: notifyGenericFailed,
+        onSettingsRequestFailed: notifyGenericFailed,
     });
 
     const [modelChoice, setModelChoice] = useState<string>('auto');
@@ -146,6 +187,16 @@ export default function App() {
     const [memoriesOpen, setMemoriesOpen] = useState(false);
     const [mcpOpen, setMcpOpen] = useState(false);
     const [analyticsOpen, setAnalyticsOpen] = useState(false);
+
+    useEffect(() => {
+        const mq = window.matchMedia('(max-width: 640px)');
+        const collapseIfNarrow = () => {
+            if (mq.matches) setAnalyticsOpen(false);
+        };
+        collapseIfNarrow();
+        mq.addEventListener('change', collapseIfNarrow);
+        return () => mq.removeEventListener('change', collapseIfNarrow);
+    }, []);
     const [resolvedModelId, setResolvedModelId] = useState<string | null>(null);
     const [resolvedBaseModel, setResolvedBaseModel] = useState<string | null>(null);
     const [usedModels, setUsedModels] = useState<string[]>([]);
@@ -168,6 +219,7 @@ export default function App() {
     const [pendingImageDataUrl, setPendingImageDataUrl] = useState<string>('');
     const [pendingImageName, setPendingImageName] = useState<string>('');
     const imageInputRef = useRef<HTMLInputElement | null>(null);
+    const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
 
     const agentMode = useAppStore((s) => s.agentMode);
 
@@ -194,7 +246,7 @@ export default function App() {
         append,
     } = useChat({
         api: '/api/chat',
-        body: { model: modelChoice, profileId: activeProfile?.id, agentMode },
+        body: { model: modelChoice, profileId: activeProfile?.id, agentMode, uiLang },
         onResponse: (response) => {
             const resolved = response.headers.get('x-helper-resolved-model');
             const baseModel = response.headers.get('x-helper-base-model');
@@ -211,6 +263,15 @@ export default function App() {
     });
     const busy = status === 'submitted' || status === 'streaming';
 
+    const setAgentProgress = useAppStore((s) => s.setAgentProgress);
+    const prevBusyRef = useRef(false);
+    useEffect(() => {
+        if (prevBusyRef.current && !busy) {
+            setAgentProgress(0, 0);
+        }
+        prevBusyRef.current = busy;
+    }, [busy, setAgentProgress]);
+
     const {
         liveState,
         voiceError: liveVoiceError,
@@ -222,7 +283,7 @@ export default function App() {
         browserTtsVoiceUri: activeBrowserVoiceUri,
         ttsEnabled: ttsOutputEnabled,
         append,
-        chatBody: { model: modelChoice, profileId: activeProfile?.id },
+        chatBody: { model: modelChoice, profileId: activeProfile?.id, uiLang, agentMode },
         messages,
         status,
         onInterimChange: setVoiceInterim,
@@ -372,12 +433,19 @@ export default function App() {
 
     const submitFromComposer = async (e: React.FormEvent<HTMLFormElement>) => {
         setVoiceInterim(null);
+        const ta = composerTextareaRef.current;
+        if (ta) {
+            const domVal = ta.value;
+            if (domVal !== input) {
+                flushSync(() => setInput(domVal));
+            }
+        }
         if (!pendingImageDataUrl) {
             handleSubmit(e);
             return;
         }
         e.preventDefault();
-        const text = input.trim();
+        const text = (composerTextareaRef.current?.value ?? input).trim();
         const dataUrl = pendingImageDataUrl;
         setInput('');
         setPendingImageDataUrl('');
@@ -456,7 +524,7 @@ export default function App() {
         <>
             <NotificationToast />
             <div className={`layout ${sidebarOpen ? 'with-sidebar' : ''}`}>
-                <Sidebar activeProfile={activeProfile} />
+                <Sidebar activeProfile={activeProfile} tx={tx} />
                 {activeView === 'chat' && (
                     <div className="chat-history-panel">
                         <ChatSessionList
@@ -500,22 +568,32 @@ export default function App() {
                                 type="button"
                                 className={`agent-mode-toggle ${agentMode ? 'active' : ''}`}
                                 onClick={() => setAgentMode(!agentMode)}
-                                title={agentMode ? 'Agent Mode ON — multi-turn autonomous' : 'Agent Mode OFF — standard chat'}
+                                title={agentMode ? tx.agentModeTooltipOn : tx.agentModeTooltipOff}
                             >
-                                {agentMode ? '🤖 Agent' : '💬 Chat'}
+                                {agentMode ? tx.agentModeBadgeOn : tx.agentModeBadgeOff}
                             </button>
                         </div>
                     )}
                     {activeView === 'learning' && (
-                        <LearningDashboard profileId={activeProfile?.id} />
+                        <Suspense fallback={<div className="view-loading">{tx.panelLoading}</div>}>
+                            <LearningDashboard profileId={activeProfile?.id} tx={tx} />
+                        </Suspense>
                     )}
                     {activeView === 'wiki' && (
-                        <WikiBrowser profileId={activeProfile?.id} />
+                        <Suspense fallback={<div className="view-loading">{tx.panelLoading}</div>}>
+                            <WikiBrowser profileId={activeProfile?.id} tx={tx} />
+                        </Suspense>
                     )}
-                    {activeView === 'autopilot' && <AutopilotPanel />}
+                    {activeView === 'autopilot' && (
+                        <Suspense fallback={<div className="view-loading">{tx.panelLoading}</div>}>
+                            <AutopilotPanel tx={tx} />
+                        </Suspense>
+                    )}
                     {activeView === 'settings' && (
                         <div style={{ padding: '1rem' }}>
-                            <button className="btn-outline" onClick={() => setSettingsOpen(true)}>Open Settings</button>
+                            <button type="button" className="btn-outline" onClick={() => setSettingsOpen(true)}>
+                                {tx.settingsOpenButton}
+                            </button>
                         </div>
                     )}
                     {activeView === 'chat' && error && <div className="error-banner">{error.message || String(error)}</div>}
@@ -551,8 +629,9 @@ export default function App() {
                             </span>
                             <span className="muted">
                                 {' '}
-                                · STT {sttReady ? 'ok' : 'off'} · TTS{' '}
-                                {ttsReady && ttsOutputEnabled ? 'on' : 'off'}
+                                · {tx.voiceStt}{' '}
+                                {sttReady ? tx.analyticsOk : tx.toggleOffShort} · {tx.voiceTts}{' '}
+                                {ttsReady && ttsOutputEnabled ? tx.toggleOnShort : tx.toggleOffShort}
                             </span>
                         </div>
                     )}
@@ -594,6 +673,7 @@ export default function App() {
                         onSubmit={submitFromComposer}
                         onAppendImage={handleAppendImage}
                         imageInputRef={imageInputRef}
+                        textareaRef={composerTextareaRef}
                         analyticsSection={
                             <AnalyticsPanel
                                 analyticsOpen={analyticsOpen}
@@ -621,7 +701,9 @@ export default function App() {
                             />
                         }
                     />}
-                    <BottomPanel />
+                    <Suspense fallback={null}>
+                        <BottomPanel tx={tx} />
+                    </Suspense>
                 </main>
             </div>
             <MemoryModal
@@ -689,12 +771,20 @@ export default function App() {
                 } : undefined}
                 onSavePersona={async (data) => {
                     if (!activeProfile?.id) return;
-                    await fetch(`/api/profiles/${activeProfile.id}`, {
-                        method: 'PATCH',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(data),
-                    });
-                    await loadProfiles();
+                    try {
+                        const r = await fetch(`/api/profiles/${activeProfile.id}`, {
+                            method: 'PATCH',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(data),
+                        });
+                        if (!r.ok) {
+                            notifyGenericFailed();
+                            return;
+                        }
+                        await loadProfiles();
+                    } catch {
+                        notifyGenericFailed();
+                    }
                 }}
             />
         </>

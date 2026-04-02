@@ -76,6 +76,7 @@ Complete the following task efficiently and return a clear result.`;
 
   while (turn < maxTurns) {
     turn++;
+    toolContext.emitProgress({ turn, maxTurns, phase: "llm" });
     try {
       const result = await generateText({
         model: togetherLlm(selectedModel),

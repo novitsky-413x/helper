@@ -41,7 +41,7 @@ export function useLiveVoice(options: {
   browserTtsVoiceUri?: string;
   ttsEnabled: boolean;
   append: AppendFn;
-  chatBody: { model: string; profileId?: string };
+  chatBody: { model: string; profileId?: string; uiLang?: "ru" | "en"; agentMode?: boolean };
   messages: Array<{ id?: string; role: string; content?: string; parts?: Array<{ type: string; text?: string }> }>;
   status: "ready" | "submitted" | "streaming" | "error";
   onInterimChange: (text: string | null) => void;

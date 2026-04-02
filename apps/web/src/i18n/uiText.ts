@@ -109,6 +109,86 @@ export type UiText = {
   mcpDeleteConfirm: string;
   memoryTab: string;
   mcpTab: string;
+  personaTitle: string;
+  personaAvatar: string;
+  personaVoiceStyle: string;
+  personaVoiceStylePlaceholder: string;
+  personaPersonality: string;
+  personaPersonalityPlaceholder: string;
+  savePersona: string;
+  profileAddFailedTitle: string;
+  profileAddFailedBody: string;
+  genericRequestFailedTitle: string;
+  genericRequestFailedBody: string;
+  panelLoading: string;
+  /** Bottom panel */
+  bottomPanelBar: string;
+  bottomTabTerminal: string;
+  bottomTabTasks: string;
+  bottomTabAgentLog: string;
+  bottomClosePanel: string;
+  bottomTasksEmpty: string;
+  bottomAgentIdle: string;
+  bottomAgentTurnLabel: string;
+  /** Model picker */
+  modelAutoOption: string;
+  modelSearchPlaceholder: string;
+  /** Composer slash menu */
+  slashDescCompact: string;
+  slashDescDream: string;
+  slashDescPersona: string;
+  slashDescTasks: string;
+  slashDescLearn: string;
+  slashDescWiki: string;
+  slashDescAutopilot: string;
+  slashDescContext: string;
+  /** Sidebar */
+  navChat: string;
+  navLearning: string;
+  navWiki: string;
+  navAutopilot: string;
+  navSettings: string;
+  sidebarDreaming: string;
+  sidebarDreamDone: string;
+  sidebarReconnecting: string;
+  sidebarConnected: string;
+  sidebarDisconnected: string;
+  /** Learning view */
+  learningTitle: string;
+  learningEmpty: string;
+  learningLesson: string;
+  /** Wiki view */
+  wikiTitle: string;
+  wikiSearchPlaceholder: string;
+  wikiEmpty: string;
+  wikiBack: string;
+  /** Autopilot view */
+  autopilotTitle: string;
+  autopilotPassive: string;
+  autopilotPassiveDesc: string;
+  autopilotAdvisory: string;
+  autopilotAdvisoryDesc: string;
+  autopilotAutonomous: string;
+  autopilotAutonomousDesc: string;
+  autopilotRecentObs: string;
+  autopilotObsEmpty: string;
+  /** Settings route stub + agent toggle */
+  settingsOpenButton: string;
+  agentModeTooltipOn: string;
+  agentModeTooltipOff: string;
+  agentModeBadgeOn: string;
+  agentModeBadgeOff: string;
+  /** Voice status bar */
+  voiceStt: string;
+  voiceTts: string;
+  toggleOnShort: string;
+  toggleOffShort: string;
+  /** Analytics (remaining English rows) */
+  analyticsMemoryWrites: string;
+  analyticsLastMemoryWrite: string;
+  analyticsMem0InPrompt: string;
+  analyticsOk: string;
+  analyticsFail: string;
 };
 
 export const UI_TEXT: Record<UiLang, UiText> = {
@@ -222,6 +302,77 @@ export const UI_TEXT: Record<UiLang, UiText> = {
     mcpDeleteConfirm: "Удалить этот MCP сервер?",
     memoryTab: "Память",
     mcpTab: "MCP",
+    personaTitle: "🎭 Персона профиля",
+    personaAvatar: "Аватар",
+    personaVoiceStyle: "Стиль голоса",
+    personaVoiceStylePlaceholder: "Дружелюбно, кратко...",
+    personaPersonality: "Характер",
+    personaPersonalityPlaceholder: "Как агент должен себя вести...",
+    savePersona: "Сохранить персону",
+    profileAddFailedTitle: "Не удалось создать профиль",
+    profileAddFailedBody: "Проверьте ответ сервера и попробуйте снова.",
+    genericRequestFailedTitle: "Запрос не выполнен",
+    genericRequestFailedBody: "Проверьте соединение с сервером и попробуйте снова.",
+    panelLoading: "Загрузка…",
+    bottomPanelBar: "Панель",
+    bottomTabTerminal: "Терминал",
+    bottomTabTasks: "Задачи",
+    bottomTabAgentLog: "Агент",
+    bottomClosePanel: "Закрыть панель",
+    bottomTasksEmpty: "Нет активных задач.",
+    bottomAgentIdle: "Агент простаивает.",
+    bottomAgentTurnLabel: "Ход",
+    modelAutoOption: "Авто (по стоимости)",
+    modelSearchPlaceholder: "Фильтр моделей…",
+    slashDescCompact: "Сжать контекст диалога",
+    slashDescDream: "Запустить консолидацию памяти",
+    slashDescPersona: "Сменить персону агента",
+    slashDescTasks: "Список задач агента",
+    slashDescLearn: "Создать план обучения",
+    slashDescWiki: "Поиск или статьи вики",
+    slashDescAutopilot: "Статус автопилота / режим",
+    slashDescContext: "Подсказка по контексту (см. аналитику)",
+    navChat: "Чат",
+    navLearning: "Обучение",
+    navWiki: "Вики",
+    navAutopilot: "Автопилот",
+    navSettings: "Настройки",
+    sidebarDreaming: "Сон памяти…",
+    sidebarDreamDone: "Сон завершён",
+    sidebarReconnecting: "Переподключение…",
+    sidebarConnected: "Подключено",
+    sidebarDisconnected: "Нет связи",
+    learningTitle: "Планы обучения",
+    learningEmpty:
+      "Пока нет планов. В чате введите /learn <тема>, чтобы создать план.",
+    learningLesson: "Урок",
+    wikiTitle: "База знаний",
+    wikiSearchPlaceholder: "Поиск по вики…",
+    wikiEmpty: "Статей пока нет. Агент создаст их в процессе обучения.",
+    wikiBack: "Назад",
+    autopilotTitle: "Автопилот",
+    autopilotPassive: "Пассивный",
+    autopilotPassiveDesc: "Только журнал",
+    autopilotAdvisory: "Советник",
+    autopilotAdvisoryDesc: "Журнал и подсказки",
+    autopilotAutonomous: "Автономный",
+    autopilotAutonomousDesc: "Журнал и действия",
+    autopilotRecentObs: "Недавние наблюдения",
+    autopilotObsEmpty: "Пока нет наблюдений.",
+    settingsOpenButton: "Открыть настройки",
+    agentModeTooltipOn: "Режим агента: несколько шагов и инструменты",
+    agentModeTooltipOff: "Обычный чат: один ответ без цикла агента",
+    agentModeBadgeOn: "🤖 Агент",
+    agentModeBadgeOff: "💬 Чат",
+    voiceStt: "STT",
+    voiceTts: "TTS",
+    toggleOnShort: "вкл",
+    toggleOffShort: "выкл",
+    analyticsMemoryWrites: "Записей памяти (успех / ошибка)",
+    analyticsLastMemoryWrite: "Последняя запись памяти",
+    analyticsMem0InPrompt: "mem0 в текущем запросе",
+    analyticsOk: "ок",
+    analyticsFail: "ошибка",
   },
   en: {
     model: "Model",
@@ -333,5 +484,75 @@ export const UI_TEXT: Record<UiLang, UiText> = {
     mcpDeleteConfirm: "Remove this MCP server?",
     memoryTab: "Memory",
     mcpTab: "MCP",
+    personaTitle: "🎭 Profile persona",
+    personaAvatar: "Avatar",
+    personaVoiceStyle: "Voice style",
+    personaVoiceStylePlaceholder: "Friendly, concise...",
+    personaPersonality: "Personality",
+    personaPersonalityPlaceholder: "Describe how the agent should behave...",
+    savePersona: "Save persona",
+    profileAddFailedTitle: "Could not create profile",
+    profileAddFailedBody: "Check the server response and try again.",
+    genericRequestFailedTitle: "Request failed",
+    genericRequestFailedBody: "Check your connection to the server and try again.",
+    panelLoading: "Loading…",
+    bottomPanelBar: "Panel",
+    bottomTabTerminal: "Terminal",
+    bottomTabTasks: "Tasks",
+    bottomTabAgentLog: "Agent",
+    bottomClosePanel: "Close panel",
+    bottomTasksEmpty: "No active tasks.",
+    bottomAgentIdle: "Agent idle.",
+    bottomAgentTurnLabel: "Turn",
+    modelAutoOption: "Auto (cost-aware)",
+    modelSearchPlaceholder: "Filter models…",
+    slashDescCompact: "Compact conversation context",
+    slashDescDream: "Trigger memory consolidation",
+    slashDescPersona: "Switch agent persona",
+    slashDescTasks: "List current agent tasks",
+    slashDescLearn: "Create a learning plan",
+    slashDescWiki: "Search or create wiki articles",
+    slashDescAutopilot: "Autopilot status / toggle mode",
+    slashDescContext: "Context hint (see analytics)",
+    navChat: "Chat",
+    navLearning: "Learning",
+    navWiki: "Wiki",
+    navAutopilot: "Autopilot",
+    navSettings: "Settings",
+    sidebarDreaming: "Dreaming…",
+    sidebarDreamDone: "Dream done",
+    sidebarReconnecting: "Reconnecting…",
+    sidebarConnected: "Connected",
+    sidebarDisconnected: "Disconnected",
+    learningTitle: "Learning Plans",
+    learningEmpty: "No learning plans yet. Use /learn <topic> in chat to create one.",
+    learningLesson: "Lesson",
+    wikiTitle: "Knowledge Base",
+    wikiSearchPlaceholder: "Search wiki…",
+    wikiEmpty: "No wiki articles yet. The agent will create them during learning sessions.",
+    wikiBack: "Back",
+    autopilotTitle: "Autopilot Observer",
+    autopilotPassive: "Passive",
+    autopilotPassiveDesc: "Log only",
+    autopilotAdvisory: "Advisory",
+    autopilotAdvisoryDesc: "Log + suggest",
+    autopilotAutonomous: "Autonomous",
+    autopilotAutonomousDesc: "Log + act",
+    autopilotRecentObs: "Recent Observations",
+    autopilotObsEmpty: "No observations yet.",
+    settingsOpenButton: "Open settings",
+    agentModeTooltipOn: "Agent mode: multi-step runs with tools",
+    agentModeTooltipOff: "Standard chat: single reply without agent loop",
+    agentModeBadgeOn: "🤖 Agent",
+    agentModeBadgeOff: "💬 Chat",
+    voiceStt: "STT",
+    voiceTts: "TTS",
+    toggleOnShort: "on",
+    toggleOffShort: "off",
+    analyticsMemoryWrites: "Memory writes (ok / fail)",
+    analyticsLastMemoryWrite: "Last memory write",
+    analyticsMem0InPrompt: "mem0 in current prompt",
+    analyticsOk: "ok",
+    analyticsFail: "fail",
   },
 };

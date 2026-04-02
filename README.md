@@ -41,7 +41,7 @@ A local-first AI assistant with persistent memory, autonomous agent capabilities
 | Layer | Technology |
 |-------|-----------|
 | Frontend | React 19, Vite 8, Zustand, Socket.io client, xterm.js |
-| Backend | Express 5, Vercel AI SDK, Socket.io |
+| Backend | Express 4, Vercel AI SDK, Socket.io |
 | LLM Provider | Together.ai (OpenAI-compatible API) |
 | Memory | Mem0 OSS (in-memory vectors + SQLite history) |
 | Database | SQLite (better-sqlite3, WAL mode) — 13 tables |

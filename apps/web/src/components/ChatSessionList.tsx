@@ -61,7 +61,8 @@ export function ChatSessionList({ profileId, onSessionSelect, onNewChat }: ChatS
         e.stopPropagation();
         if (!confirm('Delete this chat session?')) return;
         try {
-            await fetch(`/api/chat-sessions/${sessionId}`, { method: 'DELETE' });
+            const res = await fetch(`/api/chat-sessions/${sessionId}`, { method: 'DELETE' });
+            if (!res.ok) return;
             if (activeChatSessionId === sessionId) {
                 setActiveChatSessionId(null);
                 onNewChat();

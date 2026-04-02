@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import type { UiText } from "../i18n/uiText";
 import type { TogetherModel, Profile, ModelHealthEntry } from "../types/appTypes";
 import { formatPricePerMillion } from "../hooks/useAnalyticsMetrics";
@@ -29,6 +30,24 @@ export function AppHeader(props: {
   setTtsOutputEnabled: React.Dispatch<React.SetStateAction<boolean>>;
 }) {
   const { tx, models, modelChoice, profiles, activeProfile, modelHealth } = props;
+  const [modelQuery, setModelQuery] = useState("");
+
+  const filteredModels = useMemo(() => {
+    const q = modelQuery.trim().toLowerCase();
+    if (!q) return models;
+    return models.filter(
+      (m) =>
+        m.id.toLowerCase().includes(q) || (m.display_name ?? "").toLowerCase().includes(q),
+    );
+  }, [models, modelQuery]);
+
+  const modelsForSelect = useMemo(() => {
+    if (modelChoice === "auto") return filteredModels;
+    const sel = models.find((m) => m.id === modelChoice);
+    if (!sel) return filteredModels;
+    if (filteredModels.some((m) => m.id === modelChoice)) return filteredModels;
+    return [sel, ...filteredModels];
+  }, [models, filteredModels, modelChoice]);
 
   return (
     <header className="top">
@@ -42,15 +61,28 @@ export function AppHeader(props: {
       >
         +
       </button>
-      <label>
+      <label className="model-select-block">
         {tx.model}
+        <input
+          type="search"
+          id="helper-model-filter"
+          name="helper-model-filter"
+          className="model-filter-input"
+          value={modelQuery}
+          onChange={(e) => setModelQuery(e.target.value)}
+          placeholder={tx.modelSearchPlaceholder}
+          aria-label={tx.modelSearchPlaceholder}
+          autoComplete="off"
+        />
         <select
+          id="helper-model-choice"
+          name="helper-model-choice"
           className="model-select"
           value={modelChoice}
           onChange={(e) => props.setModelChoice(e.target.value)}
         >
-          <option value="auto">Auto (cost-aware)</option>
-          {models.map((m) => {
+          <option value="auto">{tx.modelAutoOption}</option>
+          {modelsForSelect.map((m) => {
             const h = modelHealth[m.id];
             const prefix = h ? (HEALTH_PREFIX[h.status] ?? "") : "";
             return (
@@ -64,6 +96,8 @@ export function AppHeader(props: {
       <label>
         {tx.memoryProfile}
         <select
+          id="helper-profile-choice"
+          name="helper-profile-choice"
           className="model-select"
           value={activeProfile?.id ?? ""}
           onChange={(e) => props.onProfileChange(e.target.value)}

@@ -1,24 +1,51 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Eye, Pause, Zap } from 'lucide-react';
 import { useAppStore } from '../store/index.js';
 import type { AutopilotMode, AutopilotObservation } from '@helper/shared';
+import type { UiText } from '../i18n/uiText';
 
-const MODES: Array<{ id: AutopilotMode; icon: typeof Eye; label: string; desc: string }> = [
-    { id: 'passive', icon: Pause, label: 'Passive', desc: 'Log only' },
-    { id: 'advisory', icon: Eye, label: 'Advisory', desc: 'Log + suggest' },
-    { id: 'autonomous', icon: Zap, label: 'Autonomous', desc: 'Log + act' },
-];
-
-export function AutopilotPanel() {
+export function AutopilotPanel({ tx }: { tx: UiText }) {
     const mode = useAppStore((s) => s.autopilotMode);
     const observations = useAppStore((s) => s.autopilotObservations);
     const setMode = useAppStore((s) => s.setAutopilotMode);
     const [serverObs, setServerObs] = useState<AutopilotObservation[]>([]);
 
+    const modes = useMemo(
+        () =>
+            [
+                { id: 'passive' as const, icon: Pause, label: tx.autopilotPassive, desc: tx.autopilotPassiveDesc },
+                { id: 'advisory' as const, icon: Eye, label: tx.autopilotAdvisory, desc: tx.autopilotAdvisoryDesc },
+                {
+                    id: 'autonomous' as const,
+                    icon: Zap,
+                    label: tx.autopilotAutonomous,
+                    desc: tx.autopilotAutonomousDesc,
+                },
+            ] satisfies Array<{
+                id: AutopilotMode;
+                icon: typeof Eye;
+                label: string;
+                desc: string;
+            }>,
+        [
+            tx.autopilotPassive,
+            tx.autopilotPassiveDesc,
+            tx.autopilotAdvisory,
+            tx.autopilotAdvisoryDesc,
+            tx.autopilotAutonomous,
+            tx.autopilotAutonomousDesc,
+        ],
+    );
+
     useEffect(() => {
         fetch('/api/autopilot/observations?limit=30')
-            .then((r) => r.json())
-            .then((data) => setServerObs(data.observations ?? []))
+            .then((r) => {
+                if (!r.ok) return null;
+                return r.json();
+            })
+            .then((data) => {
+                if (data && Array.isArray(data.observations)) setServerObs(data.observations);
+            })
             .catch(() => {});
     }, []);
 
@@ -27,22 +54,29 @@ export function AutopilotPanel() {
     )].slice(0, 50);
 
     const changeMode = async (newMode: AutopilotMode) => {
+        const prev = useAppStore.getState().autopilotMode;
         setMode(newMode);
-        await fetch('/api/autopilot/mode', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ mode: newMode }),
-        }).catch(() => {});
+        try {
+            const r = await fetch('/api/autopilot/mode', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mode: newMode }),
+            });
+            if (!r.ok) setMode(prev);
+        } catch {
+            setMode(prev);
+        }
     };
 
     return (
         <div className="autopilot-panel">
-            <h2>Autopilot Observer</h2>
+            <h2>{tx.autopilotTitle}</h2>
 
             <div className="autopilot-modes">
-                {MODES.map((m) => (
+                {modes.map((m) => (
                     <button
                         key={m.id}
+                        type="button"
                         className={`autopilot-mode-btn ${mode === m.id ? 'active' : ''}`}
                         onClick={() => void changeMode(m.id)}
                     >
@@ -53,10 +87,10 @@ export function AutopilotPanel() {
                 ))}
             </div>
 
-            <h3>Recent Observations</h3>
+            <h3>{tx.autopilotRecentObs}</h3>
             <div className="autopilot-observations">
                 {allObs.length === 0 ? (
-                    <p className="autopilot-empty">No observations yet.</p>
+                    <p className="autopilot-empty">{tx.autopilotObsEmpty}</p>
                 ) : (
                     <ul>
                         {allObs.map((obs) => (

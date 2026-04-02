@@ -4,10 +4,21 @@ import type { ModelCatalog, McpServer, MemoryRow, Profile, TaskCategory, UsageSn
 
 const LS_PROFILE = "helper-active-profile";
 
-export function useBackendData(params: {
+export function useBackendData({
+  profileDeleteConfirm,
+  memoryDeleteConfirm,
+  mcpDeleteConfirm,
+  onProfileAddFailed,
+  onMcpSaveFailed,
+  onSettingsRequestFailed,
+}: {
   profileDeleteConfirm: string;
   memoryDeleteConfirm: string;
   mcpDeleteConfirm: string;
+  onProfileAddFailed?: () => void;
+  onMcpSaveFailed?: () => void;
+  /** Rename profile, memory policy, model order, memory rows, profile delete */
+  onSettingsRequestFailed?: () => void;
 }) {
   const [models, setModels] = useState<ModelCatalog["chatModels"]>([]);
   const [modelCatalog, setModelCatalog] = useState<ModelCatalog | null>(null);
@@ -86,7 +97,10 @@ export function useBackendData(params: {
     const list = j.profiles;
     setProfiles(list);
     const fromLs = localStorage.getItem(LS_PROFILE);
-    if (fromLs && list.some((p) => p.id === fromLs)) {
+    if (list.length === 0) {
+      setActiveProfileId(null);
+      localStorage.removeItem(LS_PROFILE);
+    } else if (fromLs && list.some((p) => p.id === fromLs)) {
       setActiveProfileId(fromLs);
     } else if (list[0]) {
       setActiveProfileId(list[0].id);
@@ -163,30 +177,44 @@ export function useBackendData(params: {
 
   const addProfile = useCallback(async () => {
     const name = newProfileName.trim() || "Profile";
-    const r = await fetch("/api/profiles", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
-    });
-    const p = await r.json();
-    setNewProfileName("");
-    await loadProfiles();
-    onProfileChange(p.id);
-  }, [newProfileName, loadProfiles, onProfileChange]);
+    try {
+      const r = await fetch("/api/profiles", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      const p = (await r.json()) as { id?: string };
+      if (!r.ok || !p.id) {
+        console.warn("addProfile failed", r.status, p);
+        onProfileAddFailed?.();
+        return;
+      }
+      setNewProfileName("");
+      await loadProfiles();
+      onProfileChange(p.id);
+    } catch (e) {
+      console.warn("addProfile failed", e);
+      onProfileAddFailed?.();
+    }
+  }, [newProfileName, loadProfiles, onProfileChange, onProfileAddFailed]);
 
   const renameProfile = useCallback(async (id: string, name: string) => {
-    await fetch(`/api/profiles/${id}`, {
+    const r = await fetch(`/api/profiles/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }),
     });
+    if (!r.ok) {
+      onSettingsRequestFailed?.();
+      return;
+    }
     await loadProfiles();
-  }, [loadProfiles]);
+  }, [loadProfiles, onSettingsRequestFailed]);
 
   const saveCategoryOrder = useCallback(async (category: TaskCategory, order: string[]) => {
     if (!activeProfile?.id) return;
     const prev = activeProfile.modelPreferences?.categories ?? {};
-    await fetch(`/api/profiles/${activeProfile.id}/model-preferences`, {
+    const r = await fetch(`/api/profiles/${activeProfile.id}/model-preferences`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -198,8 +226,12 @@ export function useBackendData(params: {
         },
       }),
     });
+    if (!r.ok) {
+      onSettingsRequestFailed?.();
+      return;
+    }
     await loadProfiles();
-  }, [activeProfile, loadProfiles]);
+  }, [activeProfile, loadProfiles, onSettingsRequestFailed]);
 
   const moveCategoryModel = useCallback(
     async (category: TaskCategory, modelId: string, direction: "up" | "down") => {
@@ -219,41 +251,55 @@ export function useBackendData(params: {
 
   const saveMemoryPolicy = useCallback(async (patch: { topK?: number; maxChars?: number; pinnedOnlyForSimple?: boolean }) => {
     if (!activeProfile?.id) return;
-    await fetch(`/api/profiles/${activeProfile.id}/memory-policy`, {
+    const r = await fetch(`/api/profiles/${activeProfile.id}/memory-policy`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
     });
+    if (!r.ok) {
+      onSettingsRequestFailed?.();
+      return;
+    }
     await loadProfiles();
-  }, [activeProfile, loadProfiles]);
+  }, [activeProfile, loadProfiles, onSettingsRequestFailed]);
 
   const removeProfile = useCallback(
     async (id: string) => {
-      if (!confirm(params.profileDeleteConfirm)) return;
-      await fetch(`/api/profiles/${id}`, { method: "DELETE" });
+      if (!confirm(profileDeleteConfirm)) return;
+      const r = await fetch(`/api/profiles/${id}`, { method: "DELETE" });
+      if (!r.ok) {
+        onSettingsRequestFailed?.();
+        return;
+      }
       await loadProfiles();
-      const next = profiles.find((p) => p.id !== id);
-      if (next) onProfileChange(next.id);
     },
-    [params.profileDeleteConfirm, loadProfiles, profiles, onProfileChange]
+    [profileDeleteConfirm, loadProfiles, onSettingsRequestFailed]
   );
 
   const saveMemory = useCallback(async (id: string, text: string) => {
-    await fetch(`/api/memory/${id}`, {
+    const r = await fetch(`/api/memory/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),
     });
+    if (!r.ok) {
+      onSettingsRequestFailed?.();
+      return;
+    }
     await loadMemory();
-  }, [loadMemory]);
+  }, [loadMemory, onSettingsRequestFailed]);
 
   const removeMemory = useCallback(
     async (id: string) => {
-      if (!confirm(params.memoryDeleteConfirm)) return;
-      await fetch(`/api/memory/${id}`, { method: "DELETE" });
+      if (!confirm(memoryDeleteConfirm)) return;
+      const r = await fetch(`/api/memory/${id}`, { method: "DELETE" });
+      if (!r.ok) {
+        onSettingsRequestFailed?.();
+        return;
+      }
       await loadMemory();
     },
-    [params.memoryDeleteConfirm, loadMemory]
+    [memoryDeleteConfirm, loadMemory, onSettingsRequestFailed]
   );
 
   const saveMcp = useCallback(async () => {
@@ -261,37 +307,57 @@ export function useBackendData(params: {
       .split(/\s+/)
       .map((s) => s.trim())
       .filter(Boolean);
-    await fetch("/api/mcp/servers", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: mcpForm.name.trim() || "MCP",
-        enabled: mcpForm.enabled,
-        transport: mcpForm.transport,
-        url: mcpForm.transport === "http" ? mcpForm.url.trim() : undefined,
-        command: mcpForm.transport === "stdio" ? mcpForm.command.trim() : undefined,
-        args: mcpForm.transport === "stdio" ? args : undefined,
-      }),
-    });
-    setMcpForm({ name: "", transport: mcpForm.transport, url: "", command: "", args: "", enabled: true });
-    await loadMcp();
-  }, [mcpForm, loadMcp]);
+    try {
+      const r = await fetch("/api/mcp/servers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: mcpForm.name.trim() || "MCP",
+          enabled: mcpForm.enabled,
+          transport: mcpForm.transport,
+          url: mcpForm.transport === "http" ? mcpForm.url.trim() : undefined,
+          command: mcpForm.transport === "stdio" ? mcpForm.command.trim() : undefined,
+          args: mcpForm.transport === "stdio" ? args : undefined,
+        }),
+      });
+      if (!r.ok) {
+        onMcpSaveFailed?.();
+        return;
+      }
+      setMcpForm({ name: "", transport: mcpForm.transport, url: "", command: "", args: "", enabled: true });
+      await loadMcp();
+    } catch {
+      onMcpSaveFailed?.();
+    }
+  }, [mcpForm, loadMcp, onMcpSaveFailed]);
 
   const testMcp = useCallback(async (id: string) => {
     setTestResult(null);
-    const r = await fetch(`/api/mcp/servers/${id}/test`, { method: "POST" });
-    const j = await r.json();
-    setTestResult(JSON.stringify(j, null, 2));
+    try {
+      const r = await fetch(`/api/mcp/servers/${id}/test`, { method: "POST" });
+      const j = (await r.json()) as Record<string, unknown>;
+      if (!r.ok) {
+        setTestResult(JSON.stringify({ error: j.error ?? j, status: r.status }, null, 2));
+        return;
+      }
+      setTestResult(JSON.stringify(j, null, 2));
+    } catch (e) {
+      setTestResult(String(e));
+    }
   }, []);
 
   const deleteMcp = useCallback(
     async (id: string) => {
-      if (!confirm(params.mcpDeleteConfirm)) return;
-      await fetch(`/api/mcp/servers/${id}`, { method: "DELETE" });
+      if (!confirm(mcpDeleteConfirm)) return;
+      const r = await fetch(`/api/mcp/servers/${id}`, { method: "DELETE" });
+      if (!r.ok) {
+        onMcpSaveFailed?.();
+        return;
+      }
       await loadMcp();
       setTestResult(null);
     },
-    [params.mcpDeleteConfirm, loadMcp]
+    [mcpDeleteConfirm, loadMcp, onMcpSaveFailed]
   );
 
   return {

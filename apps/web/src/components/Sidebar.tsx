@@ -1,21 +1,39 @@
+import { useMemo } from 'react';
 import { MessageSquare, BookOpen, FileText, Eye, Settings, Wifi, WifiOff, RefreshCw, Moon } from 'lucide-react';
 import { useAppStore, type ViewId } from '../store/index.js';
+import type { UiText } from '../i18n/uiText';
 
-const NAV_ITEMS: Array<{ id: ViewId; icon: typeof MessageSquare; label: string }> = [
-    { id: 'chat', icon: MessageSquare, label: 'Chat' },
-    { id: 'learning', icon: BookOpen, label: 'Learning' },
-    { id: 'wiki', icon: FileText, label: 'Wiki' },
-    { id: 'autopilot', icon: Eye, label: 'Autopilot' },
-    { id: 'settings', icon: Settings, label: 'Settings' },
-];
-
-export function Sidebar({ activeProfile }: { activeProfile?: { name: string; avatarEmoji?: string } | null }) {
+export function Sidebar({
+    activeProfile,
+    tx,
+}: {
+    activeProfile?: { name: string; avatarEmoji?: string } | null;
+    tx: UiText;
+}) {
     const activeView = useAppStore((s) => s.activeView);
     const setActiveView = useAppStore((s) => s.setActiveView);
     const socketConnected = useAppStore((s) => s.socketConnected);
     const socketReconnecting = useAppStore((s) => s.socketReconnecting);
     const notifications = useAppStore((s) => s.notifications);
     const dreamStatus = useAppStore((s) => s.dreamStatus);
+
+    const navItems = useMemo(
+        () =>
+            [
+                { id: 'chat' as const, icon: MessageSquare, label: tx.navChat },
+                { id: 'learning' as const, icon: BookOpen, label: tx.navLearning },
+                { id: 'wiki' as const, icon: FileText, label: tx.navWiki },
+                { id: 'autopilot' as const, icon: Eye, label: tx.navAutopilot },
+                { id: 'settings' as const, icon: Settings, label: tx.navSettings },
+            ] satisfies Array<{ id: ViewId; icon: typeof MessageSquare; label: string }>,
+        [
+            tx.navChat,
+            tx.navLearning,
+            tx.navWiki,
+            tx.navAutopilot,
+            tx.navSettings,
+        ],
+    );
 
     const unreadNotifications = notifications.filter((n) => n.type === 'autopilot').length;
 
@@ -27,9 +45,10 @@ export function Sidebar({ activeProfile }: { activeProfile?: { name: string; ava
             </div>
 
             <nav className="sidebar-nav">
-                {NAV_ITEMS.map((item) => (
+                {navItems.map((item) => (
                     <button
                         key={item.id}
+                        type="button"
                         className={`sidebar-nav-item ${activeView === item.id ? 'active' : ''}`}
                         onClick={() => setActiveView(item.id)}
                         title={item.label}
@@ -46,21 +65,27 @@ export function Sidebar({ activeProfile }: { activeProfile?: { name: string; ava
             <div className="sidebar-footer">
                 {dreamStatus === 'running' && (
                     <div className="sidebar-dream-status running">
-                        <Moon size={14} className="spin" /> Dreaming...
+                        <Moon size={14} className="spin" /> {tx.sidebarDreaming}
                     </div>
                 )}
                 {dreamStatus === 'completed' && (
                     <div className="sidebar-dream-status completed">
-                        <Moon size={14} /> Dream done
+                        <Moon size={14} /> {tx.sidebarDreamDone}
                     </div>
                 )}
                 <div className="sidebar-status">
                     {socketReconnecting ? (
-                        <><RefreshCw size={14} className="spin" /> Reconnecting...</>
+                        <>
+                            <RefreshCw size={14} className="spin" /> {tx.sidebarReconnecting}
+                        </>
                     ) : socketConnected ? (
-                        <><Wifi size={14} /> Connected</>
+                        <>
+                            <Wifi size={14} /> {tx.sidebarConnected}
+                        </>
                     ) : (
-                        <><WifiOff size={14} /> Disconnected</>
+                        <>
+                            <WifiOff size={14} /> {tx.sidebarDisconnected}
+                        </>
                     )}
                 </div>
             </div>

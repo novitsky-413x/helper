@@ -1,16 +1,5 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState, type RefObject } from "react";
 import type { UiText } from "../i18n/uiText";
-
-const SLASH_COMMANDS = [
-    { cmd: '/compact', desc: 'Compact conversation context' },
-    { cmd: '/dream', desc: 'Trigger memory consolidation' },
-    { cmd: '/persona', desc: 'Switch agent persona' },
-    { cmd: '/tasks', desc: 'List current agent tasks' },
-    { cmd: '/learn', desc: 'Create a learning plan' },
-    { cmd: '/wiki', desc: 'Search or create wiki articles' },
-    { cmd: '/autopilot', desc: 'Autopilot status / toggle mode' },
-    { cmd: '/context', desc: 'Show context window usage' },
-];
 
 export function ChatComposer(props: {
   tx: UiText;
@@ -32,15 +21,44 @@ export function ChatComposer(props: {
   onAppendImage: (text: string, dataUrl: string) => void;
   analyticsSection: React.ReactNode;
   imageInputRef: React.RefObject<HTMLInputElement | null>;
+  textareaRef: RefObject<HTMLTextAreaElement | null>;
 }) {
-  const { tx, input, busy, liveSpeech, recordingEnabled, voiceInterim } = props;
+  const { tx, input, setInput, busy, liveSpeech, recordingEnabled, voiceInterim, textareaRef } = props;
 
   const [showSlashMenu, setShowSlashMenu] = useState(false);
   const [slashFilter, setSlashFilter] = useState('');
 
-  const filteredCommands = SLASH_COMMANDS.filter((c) =>
-    c.cmd.startsWith(slashFilter.toLowerCase())
+  const slashCommands = useMemo(
+    () => [
+      { cmd: "/compact", desc: tx.slashDescCompact },
+      { cmd: "/dream", desc: tx.slashDescDream },
+      { cmd: "/persona", desc: tx.slashDescPersona },
+      { cmd: "/tasks", desc: tx.slashDescTasks },
+      { cmd: "/learn", desc: tx.slashDescLearn },
+      { cmd: "/wiki", desc: tx.slashDescWiki },
+      { cmd: "/autopilot", desc: tx.slashDescAutopilot },
+      { cmd: "/context", desc: tx.slashDescContext },
+    ],
+    [tx],
   );
+
+  const filteredCommands = useMemo(
+    () => slashCommands.filter((c) => c.cmd.startsWith(slashFilter.toLowerCase())),
+    [slashCommands, slashFilter],
+  );
+
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    const syncFromDom = () => {
+      const v = el.value;
+      if (v !== input) {
+        setInput(v);
+      }
+    };
+    el.addEventListener("input", syncFromDom);
+    return () => el.removeEventListener("input", syncFromDom);
+  }, [input, setInput, textareaRef]);
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     props.handleInputChange(e);
@@ -57,6 +75,8 @@ export function ChatComposer(props: {
     <div className="composer">
       <input
         ref={props.imageInputRef}
+        id="chat-image-attach"
+        name="chat-image-attach"
         type="file"
         accept="image/*"
         style={{ display: "none" }}
@@ -124,9 +144,13 @@ export function ChatComposer(props: {
       <form onSubmit={props.onSubmit}>
         <div className="composer-input-wrap">
           <textarea
+            ref={textareaRef}
+            id="chat-composer-message"
+            name="chat-composer-message"
             value={input}
             onChange={handleChange}
             placeholder={tx.messagePlaceholder}
+            aria-label={tx.messagePlaceholder}
             rows={2}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
@@ -136,7 +160,8 @@ export function ChatComposer(props: {
                   props.onSubmit(e as unknown as React.FormEvent<HTMLFormElement>);
                   return;
                 }
-                props.onAppendImage(input.trim(), props.pendingImageDataUrl);
+                const raw = textareaRef.current?.value ?? input;
+                props.onAppendImage(raw.trim(), props.pendingImageDataUrl);
               }
             }}
           />

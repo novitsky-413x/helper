@@ -22,7 +22,15 @@ function HealthDot({ entry }: { entry: ModelHealthEntry | undefined }) {
 
 type PersonaData = { avatarEmoji?: string; personality?: string; voiceStyle?: string };
 
-function PersonaEditForm({ initial, onSave }: { initial: PersonaData; onSave: (data: PersonaData) => void }) {
+function PersonaEditForm({
+  tx,
+  initial,
+  onSave,
+}: {
+  tx: UiText;
+  initial: PersonaData;
+  onSave: (data: PersonaData) => void;
+}) {
   const [personaEdit, setPersonaEdit] = useState({
     avatarEmoji: initial.avatarEmoji ?? '🤖',
     personality: initial.personality ?? '',
@@ -31,15 +39,41 @@ function PersonaEditForm({ initial, onSave }: { initial: PersonaData; onSave: (d
 
   return (
     <>
-      <h3 className="settings-subheading">🎭 Profile Persona</h3>
+      <h3 className="settings-subheading">{tx.personaTitle}</h3>
       <div className="persona-form">
-        <label className="persona-label">Avatar</label>
-        <input className="persona-input" placeholder="🤖" value={personaEdit.avatarEmoji} onChange={(e) => setPersonaEdit(f => ({...f, avatarEmoji: e.target.value}))} />
-        <label className="persona-label">Voice style</label>
-        <input className="persona-input" placeholder="Friendly, concise..." value={personaEdit.voiceStyle} onChange={(e) => setPersonaEdit(f => ({...f, voiceStyle: e.target.value}))} />
-        <label className="persona-label">Personality</label>
-        <textarea className="persona-input" placeholder="Describe how the agent should behave..." value={personaEdit.personality} onChange={(e) => setPersonaEdit(f => ({...f, personality: e.target.value}))} rows={3} />
-        <button className="small primary" type="button" onClick={() => onSave(personaEdit)}>Save Persona</button>
+        <label className="persona-label">{tx.personaAvatar}</label>
+        <input
+          className="persona-input"
+          placeholder="🤖"
+          id="persona-avatar"
+          name="persona-avatar"
+          autoComplete="off"
+          value={personaEdit.avatarEmoji}
+          onChange={(e) => setPersonaEdit((f) => ({ ...f, avatarEmoji: e.target.value }))}
+        />
+        <label className="persona-label">{tx.personaVoiceStyle}</label>
+        <input
+          className="persona-input"
+          placeholder={tx.personaVoiceStylePlaceholder}
+          id="persona-voice-style"
+          name="persona-voice-style"
+          autoComplete="off"
+          value={personaEdit.voiceStyle}
+          onChange={(e) => setPersonaEdit((f) => ({ ...f, voiceStyle: e.target.value }))}
+        />
+        <label className="persona-label">{tx.personaPersonality}</label>
+        <textarea
+          className="persona-input"
+          placeholder={tx.personaPersonalityPlaceholder}
+          id="persona-personality"
+          name="persona-personality"
+          value={personaEdit.personality}
+          onChange={(e) => setPersonaEdit((f) => ({ ...f, personality: e.target.value }))}
+          rows={3}
+        />
+        <button className="small primary" type="button" onClick={() => onSave(personaEdit)}>
+          {tx.savePersona}
+        </button>
       </div>
     </>
   );
@@ -91,7 +125,13 @@ export function SettingsModal(props: {
           <section className="settings-section">
             <label className="modal-field">
               {props.tx.uiLanguage}
-              <select className="model-select" value={props.uiLang} onChange={(e) => props.setUiLang(e.target.value as UiLang)}>
+              <select
+                id="settings-ui-lang"
+                name="settings-ui-lang"
+                className="model-select"
+                value={props.uiLang}
+                onChange={(e) => props.setUiLang(e.target.value as UiLang)}
+              >
                 <option value="ru">Русский</option>
                 <option value="en">English</option>
               </select>
@@ -99,6 +139,8 @@ export function SettingsModal(props: {
             <label className="modal-field">
               {props.tx.ttsVoice}
               <select
+                id="settings-tts-voice"
+                name="settings-tts-voice"
                 className="model-select"
                 value={props.activeBrowserVoiceUri}
                 onChange={(e) => props.setVoiceForActiveProfile(e.target.value)}
@@ -117,6 +159,8 @@ export function SettingsModal(props: {
             <div className="row">
               <input
                 type="text"
+                name="new-profile-name"
+                autoComplete="off"
                 placeholder={props.tx.newProfileName}
                 value={props.newProfileName}
                 onChange={(e) => props.setNewProfileName(e.target.value)}
@@ -129,6 +173,7 @@ export function SettingsModal(props: {
               {props.profiles.map((p) => (
                 <div key={p.id} className="memory-item">
                   <ProfileRow
+                    profileId={p.id}
                     name={p.name}
                     labels={{ save: props.tx.save, delete: props.tx.delete }}
                     onSave={(name) => props.renameProfile(p.id, name)}
@@ -139,6 +184,8 @@ export function SettingsModal(props: {
             </div>
 
             <PersonaEditForm
+              key={props.activeProfileId ?? 'none'}
+              tx={props.tx}
               initial={props.activeProfilePersona ?? {}}
               onSave={props.onSavePersona}
             />
@@ -199,6 +246,8 @@ export function SettingsModal(props: {
               <label className="modal-field-inline">
                 {props.tx.memoryPolicyTopK}
                 <input
+                  id="settings-memory-top-k"
+                  name="settings-memory-top-k"
                   type="number"
                   value={props.memoryTopKDraft}
                   min={1}
@@ -210,6 +259,8 @@ export function SettingsModal(props: {
               <label className="modal-field-inline">
                 {props.tx.memoryPolicyMaxChars}
                 <input
+                  id="settings-memory-max-chars"
+                  name="settings-memory-max-chars"
                   type="number"
                   value={props.memoryMaxCharsDraft}
                   min={200}

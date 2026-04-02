@@ -1,3 +1,9 @@
+.view-loading {
+  padding: 1.25rem 1rem;
+  color: #8b92a8;
+  font-size: 0.9rem;
+}
+
 .layout {
   display: flex;
   height: 100vh;
@@ -36,6 +42,13 @@
   }
   header.top label {
     font-size: 0.72rem;
+  }
+  header.top label.model-select-block {
+    max-width: 140px;
+  }
+  input.model-filter-input {
+    font-size: 0.72rem;
+    padding: 0.3rem 0.4rem;
   }
   select.model-select {
     max-width: 140px;
@@ -93,6 +106,29 @@ header.top label {
   gap: 0.35rem;
   font-size: 0.8rem;
   color: #9aa3b5;
+}
+
+header.top label.model-select-block {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.25rem;
+  max-width: 220px;
+}
+
+input.model-filter-input {
+  background: #1e2430;
+  color: #e8eaed;
+  border: 1px solid #3d4658;
+  border-radius: 8px;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.78rem;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+input.model-filter-input::placeholder {
+  color: #6b7287;
 }
 
 select.model-select {

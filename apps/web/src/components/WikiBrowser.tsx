@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { FileText, Search, ArrowLeft } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import type { UiText } from '../i18n/uiText';
 
 interface WikiArticle {
     id: string;
@@ -10,7 +11,7 @@ interface WikiArticle {
     updatedAt: string;
 }
 
-export function WikiBrowser({ profileId }: { profileId?: string }) {
+export function WikiBrowser({ profileId, tx }: { profileId?: string; tx: UiText }) {
     const [articles, setArticles] = useState<WikiArticle[]>([]);
     const [selected, setSelected] = useState<WikiArticle | null>(null);
     const [search, setSearch] = useState('');
@@ -21,8 +22,10 @@ export function WikiBrowser({ profileId }: { profileId?: string }) {
             ? `/api/wiki?profileId=${encodeURIComponent(profileId)}&q=${encodeURIComponent(query)}`
             : `/api/wiki?profileId=${encodeURIComponent(profileId)}`;
         fetch(url)
-            .then((r) => r.json())
-            .then((data) => setArticles(data.articles ?? []))
+            .then((r) => (r.ok ? r.json() : null))
+            .then((data) => {
+                if (data && Array.isArray(data.articles)) setArticles(data.articles);
+            })
             .catch(() => {});
     }, [profileId]);
 
@@ -30,9 +33,9 @@ export function WikiBrowser({ profileId }: { profileId?: string }) {
 
     const openArticle = (id: string) => {
         fetch(`/api/wiki/${id}`)
-            .then((r) => r.json())
+            .then((r) => (r.ok ? r.json() : null))
             .then((data) => {
-                if (data.article) setSelected(data.article);
+                if (data?.article) setSelected(data.article);
             })
             .catch(() => {});
     };
@@ -40,8 +43,8 @@ export function WikiBrowser({ profileId }: { profileId?: string }) {
     if (selected) {
         return (
             <div className="wiki-article-view">
-                <button className="wiki-back" onClick={() => setSelected(null)}>
-                    <ArrowLeft size={16} /> Back
+                <button type="button" className="wiki-back" onClick={() => setSelected(null)}>
+                    <ArrowLeft size={16} /> {tx.wikiBack}
                 </button>
                 <h2>{selected.title}</h2>
                 <div className="wiki-content">
@@ -53,13 +56,17 @@ export function WikiBrowser({ profileId }: { profileId?: string }) {
 
     return (
         <div className="wiki-browser">
-            <h2><FileText size={20} /> Knowledge Base</h2>
+            <h2><FileText size={20} /> {tx.wikiTitle}</h2>
 
             <div className="wiki-search">
                 <Search size={16} />
                 <input
-                    type="text"
-                    placeholder="Search wiki..."
+                    type="search"
+                    id="wiki-search"
+                    name="wiki-search"
+                    autoComplete="off"
+                    placeholder={tx.wikiSearchPlaceholder}
+                    aria-label={tx.wikiSearchPlaceholder}
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
                     onKeyDown={(e) => { if (e.key === 'Enter') loadArticles(search); }}
@@ -67,9 +74,7 @@ export function WikiBrowser({ profileId }: { profileId?: string }) {
             </div>
 
             {articles.length === 0 ? (
-                <p className="wiki-empty">
-                    No wiki articles yet. The agent will create them during learning sessions.
-                </p>
+                <p className="wiki-empty">{tx.wikiEmpty}</p>
             ) : (
                 <ul className="wiki-list">
                     {articles.map((a) => (

@@ -34,6 +34,8 @@ export function McpModal(props: {
         <h3>{props.tx.addMcpServer}</h3>
         <div className="row">
           <input
+            id="mcp-server-name"
+            name="mcp-server-name"
             type="text"
             placeholder={props.tx.displayName}
             value={props.mcpForm.name}
@@ -42,6 +44,8 @@ export function McpModal(props: {
         </div>
         <div className="row">
           <select
+            id="mcp-transport"
+            name="mcp-transport"
             value={props.mcpForm.transport}
             onChange={(e) => props.onFormChange({ ...props.mcpForm, transport: e.target.value as "http" | "stdio" })}
           >
@@ -50,6 +54,8 @@ export function McpModal(props: {
           </select>
           <label>
             <input
+              id="mcp-enabled"
+              name="mcp-enabled"
               type="checkbox"
               checked={props.mcpForm.enabled}
               onChange={(e) => props.onFormChange({ ...props.mcpForm, enabled: e.target.checked })}
@@ -60,6 +66,8 @@ export function McpModal(props: {
         {props.mcpForm.transport === "http" ? (
           <div className="row">
             <input
+              id="mcp-url"
+              name="mcp-url"
               type="text"
               placeholder={props.tx.mcpUrl}
               value={props.mcpForm.url}
@@ -71,6 +79,8 @@ export function McpModal(props: {
           <>
             <div className="row">
               <input
+                id="mcp-command"
+                name="mcp-command"
                 type="text"
                 placeholder={props.tx.command}
                 value={props.mcpForm.command}
@@ -80,6 +90,8 @@ export function McpModal(props: {
             </div>
             <div className="row">
               <input
+                id="mcp-args"
+                name="mcp-args"
                 type="text"
                 placeholder={props.tx.args}
                 value={props.mcpForm.args}

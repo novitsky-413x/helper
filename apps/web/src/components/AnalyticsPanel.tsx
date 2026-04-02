@@ -61,7 +61,7 @@ export function AnalyticsPanel(props: {
             <div className="analytics-row"><span>{props.tx.memoryInjected}</span><strong>{props.lastUsage ? props.prettyNum(props.lastUsage.memoryBlockChars) : "—"}</strong></div>
             <div className="analytics-row"><span>{props.tx.memoryHits}</span><strong>{props.lastUsage ? props.prettyNum(props.lastUsage.memoryHits) : "—"}</strong></div>
             <div className="analytics-row">
-              <span>memory writes (ok/fail)</span>
+              <span>{props.tx.analyticsMemoryWrites}</span>
               <strong>
                 {props.lastUsage
                   ? `${props.prettyNum(props.lastUsage.memoryWriteOkTotal ?? 0)} / ${props.prettyNum(props.lastUsage.memoryWriteFailTotal ?? 0)}`
@@ -69,9 +69,13 @@ export function AnalyticsPanel(props: {
               </strong>
             </div>
             <div className="analytics-row">
-              <span>last memory write</span>
+              <span>{props.tx.analyticsLastMemoryWrite}</span>
               <strong className={props.lastUsage?.memoryWriteLastOk === false ? "warn-text" : props.lastUsage?.memoryWriteLastOk === true ? "ok-text" : ""}>
-                {props.lastUsage?.memoryWriteLastOk === true ? "ok" : props.lastUsage?.memoryWriteLastOk === false ? "fail" : "—"}
+                {props.lastUsage?.memoryWriteLastOk === true
+                  ? props.tx.analyticsOk
+                  : props.lastUsage?.memoryWriteLastOk === false
+                    ? props.tx.analyticsFail
+                    : "—"}
               </strong>
             </div>
           </div>
@@ -80,7 +84,7 @@ export function AnalyticsPanel(props: {
             <div className="analytics-row"><span>{props.tx.mem0Rows}</span><strong>{props.prettyNum(props.memoryRowsLen)}</strong></div>
             <div className="analytics-row"><span>{props.tx.mem0Chars}</span><strong>{props.prettyNum(props.mem0Chars)}</strong></div>
             <div className="analytics-row"><span>{props.tx.mem0ApproxTokens}</span><strong>~{props.prettyNum(props.mem0TokensApprox)}</strong></div>
-            <div className="analytics-row"><span>mem0 in current prompt</span><strong>~{props.prettyNum(props.mem0InjectedApprox)}</strong></div>
+            <div className="analytics-row"><span>{props.tx.analyticsMem0InPrompt}</span><strong>~{props.prettyNum(props.mem0InjectedApprox)}</strong></div>
             <p className="muted">{props.tx.mem0Note}</p>
           </div>
           <div className="analytics-card">

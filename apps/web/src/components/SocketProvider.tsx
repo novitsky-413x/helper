@@ -25,8 +25,17 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     useEffect(() => {
         if (!agentSocket) return;
 
-        const onProgress = (data: { turn: number; maxTurns: number; toolName?: string }) => {
-            setAgentProgress(data.turn, data.maxTurns, data.toolName);
+        const onProgress = (data: {
+            turn: number;
+            maxTurns: number;
+            toolName?: string;
+            phase?: 'llm' | 'tool';
+        }) => {
+            const phase = data.phase ?? (data.toolName ? 'tool' : 'llm');
+            setAgentProgress(data.turn, data.maxTurns, {
+                toolName: data.toolName ?? null,
+                phase,
+            });
         };
 
         const onTaskUpdate = (task: AgentTask) => {

@@ -262,7 +262,15 @@ export interface ServerToClientEvents {
   "terminal:output": (data: { sessionId: string; chunk: string; stream: "stdout" | "stderr" }) => void;
   "autopilot:observation": (obs: AutopilotObservation) => void;
   "autopilot:action": (data: { observationId: string; action: string; result?: string }) => void;
-  "agent:progress": (data: { sessionId: string; turn: number; maxTurns: number; toolName?: string }) => void;
+  "agent:progress": (data: {
+    sessionId: string;
+    turn: number;
+    maxTurns: number;
+    toolName?: string;
+    /** LLM streaming vs executing a tool (drives client badge copy). */
+    phase?: "llm" | "tool";
+    subAgent?: boolean;
+  }) => void;
   "agent:task-update": (task: AgentTask) => void;
   "dream:status": (data: { status: DreamSessionStatus; stats?: Record<string, number> }) => void;
   "notification": (n: AppNotification) => void;

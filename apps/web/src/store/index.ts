@@ -8,6 +8,7 @@ import type {
 
 export type ViewId = 'chat' | 'learning' | 'wiki' | 'autopilot' | 'settings';
 export type BottomPanelTab = 'terminal' | 'tasks' | 'agent-log';
+export type AgentProgressPhase = 'llm' | 'tool' | null;
 
 interface AppState {
     // UI Layout
@@ -34,8 +35,13 @@ interface AppState {
     // Agent Progress
     agentTurn: number;
     agentMaxTurns: number;
+    agentProgressPhase: AgentProgressPhase;
     currentToolName: string | null;
-    setAgentProgress: (turn: number, maxTurns: number, toolName?: string | null) => void;
+    setAgentProgress: (
+        turn: number,
+        maxTurns: number,
+        detail?: { toolName?: string | null; phase?: 'llm' | 'tool' } | null,
+    ) => void;
 
     // Autopilot
     autopilotMode: AutopilotMode;
@@ -103,9 +109,26 @@ export const useAppStore = create<AppState>((set) => ({
     // Agent Progress
     agentTurn: 0,
     agentMaxTurns: 0,
+    agentProgressPhase: null,
     currentToolName: null,
-    setAgentProgress: (turn, maxTurns, toolName) =>
-        set({ agentTurn: turn, agentMaxTurns: maxTurns, currentToolName: toolName ?? null }),
+    setAgentProgress: (turn, maxTurns, detail) => {
+        if (turn === 0 && maxTurns === 0) {
+            set({
+                agentTurn: 0,
+                agentMaxTurns: 0,
+                currentToolName: null,
+                agentProgressPhase: null,
+            });
+            return;
+        }
+        const phase = detail?.phase ?? (detail?.toolName ? 'tool' : 'llm');
+        set({
+            agentTurn: turn,
+            agentMaxTurns: maxTurns,
+            currentToolName: detail?.toolName ?? null,
+            agentProgressPhase: phase,
+        });
+    },
 
     // Autopilot
     autopilotMode: 'advisory',

@@ -38,7 +38,12 @@ export async function handleSlashCommand(
       }
 
       case "context":
-        return { handled: true, action: "context_info", response: "Context info will be shown by the agent." };
+        return {
+          handled: true,
+          action: "context_info",
+          response:
+            "Context usage, model limits, and token estimates are in the Analytics panel below the composer. This command does not run a separate context calculation on the server.",
+        };
 
       case "tasks": {
         const db = getDb();
