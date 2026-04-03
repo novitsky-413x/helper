@@ -149,7 +149,8 @@ export function AppHeader(props: {
             return next;
           })
         }
-        title={tx.liveOff}
+        title={props.liveSpeech ? tx.liveOn : tx.liveOff}
+        aria-label={props.liveSpeech ? tx.liveOn : tx.liveOff}
       >
         {props.liveSpeech ? tx.liveOn : tx.liveOff}
       </button>

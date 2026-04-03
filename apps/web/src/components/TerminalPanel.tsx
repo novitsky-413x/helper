@@ -49,6 +49,11 @@ export function TerminalPanel() {
         const term = termRef.current;
         if (!term) return;
 
+        if (terminalOutput.length < lastWrittenIdx.current) {
+            lastWrittenIdx.current = 0;
+            term.clear();
+        }
+
         for (let i = lastWrittenIdx.current; i < terminalOutput.length; i++) {
             const entry = terminalOutput[i]!;
             const text = entry.chunk.replace(/\n/g, '\r\n');

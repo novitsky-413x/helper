@@ -46,7 +46,7 @@ export function ChatSessionList({ profileId, onSessionSelect, onNewChat }: ChatS
             const res = await fetch('/api/chat-sessions', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ profileId, title: 'New Chat' }),
+                body: JSON.stringify({ profileId, title: 'Новый чат' }),
             });
             if (res.ok) {
                 const data = await res.json();
@@ -59,7 +59,7 @@ export function ChatSessionList({ profileId, onSessionSelect, onNewChat }: ChatS
 
     const handleDelete = async (e: React.MouseEvent, sessionId: string) => {
         e.stopPropagation();
-        if (!confirm('Delete this chat session?')) return;
+        if (!confirm('Удалить эту сессию чата?')) return;
         try {
             const res = await fetch(`/api/chat-sessions/${sessionId}`, { method: 'DELETE' });
             if (!res.ok) return;
@@ -73,8 +73,14 @@ export function ChatSessionList({ profileId, onSessionSelect, onNewChat }: ChatS
 
     return (
         <div className="chat-session-list">
-            <button className="chat-session-new" onClick={handleNew}>
-                <Plus size={14} /> New Chat
+            <button
+                type="button"
+                className="chat-session-new"
+                onClick={handleNew}
+                title="Новый чат"
+                aria-label="Новый чат"
+            >
+                <Plus size={14} aria-hidden /> Новый чат
             </button>
             <div className="chat-session-items">
                 {chatSessions.map((s) => (
@@ -84,18 +90,20 @@ export function ChatSessionList({ profileId, onSessionSelect, onNewChat }: ChatS
                         onClick={() => handleSelect(s.id)}
                     >
                         <MessageSquare size={14} />
-                        <span className="chat-session-title">{s.title || 'Untitled'}</span>
+                        <span className="chat-session-title">{s.title || 'Без названия'}</span>
                         <button
+                            type="button"
                             className="chat-session-delete"
                             onClick={(e) => handleDelete(e, s.id)}
-                            title="Delete"
+                            title="Удалить"
+                            aria-label="Удалить сессию"
                         >
-                            <Trash2 size={12} />
+                            <Trash2 size={12} aria-hidden />
                         </button>
                     </div>
                 ))}
                 {chatSessions.length === 0 && (
-                    <div className="chat-session-empty">No saved sessions</div>
+                    <div className="chat-session-empty">Нет сохранённых сессий</div>
                 )}
             </div>
         </div>

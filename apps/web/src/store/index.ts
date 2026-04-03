@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type {
     AgentTask,
+    AgentTaskStatus,
     AutopilotMode,
     AutopilotObservation,
     AppNotification,
@@ -9,6 +10,76 @@ import type {
 export type ViewId = 'chat' | 'learning' | 'wiki' | 'autopilot' | 'settings';
 export type BottomPanelTab = 'terminal' | 'tasks' | 'agent-log';
 export type AgentProgressPhase = 'llm' | 'tool' | null;
+
+const LS_TOOL_DOCK_OPEN = 'helper-tool-dock-open';
+
+function readToolDockOpen(): boolean {
+    if (typeof window === 'undefined') return true;
+    try {
+        const v = localStorage.getItem(LS_TOOL_DOCK_OPEN);
+        if (v === '0') return false;
+    } catch {
+        /* ignore */
+    }
+    return true;
+}
+
+function persistToolDockOpen(open: boolean): void {
+    try {
+        localStorage.setItem(LS_TOOL_DOCK_OPEN, open ? '1' : '0');
+    } catch {
+        /* ignore */
+    }
+}
+
+function taskStatusDedupeRank(status: AgentTaskStatus): number {
+    switch (status) {
+        case 'in_progress':
+            return 0;
+        case 'pending':
+            return 1;
+        case 'completed':
+            return 2;
+        case 'cancelled':
+            return 3;
+        default:
+            return 9;
+    }
+}
+
+function pickAgentTaskForDedupe(prev: AgentTask, row: AgentTask): AgentTask {
+    const a = String(row.updatedAt ?? '');
+    const b = String(prev.updatedAt ?? '');
+    if (a > b) return row;
+    if (a < b) return prev;
+    const rp = taskStatusDedupeRank(prev.status);
+    const rr = taskStatusDedupeRank(row.status);
+    if (rr !== rp) return rr < rp ? row : prev;
+    return row.id > prev.id ? row : prev;
+}
+
+/** Match server GET /api/tasks: one row per title; newest `updatedAt`, then status tie-break, then id. */
+function dedupeAgentTasksByTitle(tasks: AgentTask[]): AgentTask[] {
+    const byKey = new Map<string, AgentTask>();
+    for (const row of tasks) {
+        const raw = row.title.trim().replace(/\s+/g, ' ');
+        const key = raw.length > 0 ? raw : row.id;
+        const prev = byKey.get(key);
+        if (!prev) {
+            byKey.set(key, row);
+            continue;
+        }
+        byKey.set(key, pickAgentTaskForDedupe(prev, row));
+    }
+    const out = Array.from(byKey.values());
+    out.sort((x, y) => {
+        const px = Number(x.priority ?? 0);
+        const py = Number(y.priority ?? 0);
+        if (px !== py) return px - py;
+        return String(y.updatedAt ?? '').localeCompare(String(x.updatedAt ?? ''));
+    });
+    return out;
+}
 
 interface AppState {
     // UI Layout
@@ -79,12 +150,18 @@ export const useAppStore = create<AppState>((set) => ({
     // UI Layout
     sidebarOpen: true,
     activeView: 'chat',
-    bottomPanelOpen: false,
+    bottomPanelOpen: readToolDockOpen(),
     bottomPanelTab: 'terminal',
     setSidebarOpen: (open) => set({ sidebarOpen: open }),
     setActiveView: (view) => set({ activeView: view }),
-    setBottomPanelOpen: (open) => set({ bottomPanelOpen: open }),
-    setBottomPanelTab: (tab) => set({ bottomPanelTab: tab, bottomPanelOpen: true }),
+    setBottomPanelOpen: (open) => {
+        persistToolDockOpen(open);
+        set({ bottomPanelOpen: open });
+    },
+    setBottomPanelTab: (tab) => {
+        persistToolDockOpen(true);
+        set({ bottomPanelTab: tab, bottomPanelOpen: true });
+    },
 
     // Socket
     socketConnected: false,
@@ -94,16 +171,14 @@ export const useAppStore = create<AppState>((set) => ({
 
     // Agent Tasks
     agentTasks: [],
-    setAgentTasks: (tasks) => set({ agentTasks: tasks }),
+    setAgentTasks: (tasks) => set({ agentTasks: dedupeAgentTasksByTitle(tasks) }),
     upsertTask: (task) =>
         set((state) => {
             const idx = state.agentTasks.findIndex((t) => t.id === task.id);
-            if (idx >= 0) {
-                const next = [...state.agentTasks];
-                next[idx] = task;
-                return { agentTasks: next };
-            }
-            return { agentTasks: [...state.agentTasks, task] };
+            const next = [...state.agentTasks];
+            if (idx >= 0) next[idx] = task;
+            else next.push(task);
+            return { agentTasks: dedupeAgentTasksByTitle(next) };
         }),
 
     // Agent Progress

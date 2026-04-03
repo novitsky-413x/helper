@@ -1,13 +1,99 @@
 import { Router } from "express";
 import { z } from "zod";
 import { getDb } from "../db.js";
+import { logger } from "../logger.js";
 
 const router = Router();
+
+/** Todos left `in_progress` when the agent run ended without another todo_write — clear for list accuracy. */
+function reconcileStaleInProgressTasks(db: ReturnType<typeof getDb>) {
+  try {
+    const r = db
+      .prepare(
+        `UPDATE agent_tasks SET status = 'pending', updatedAt = datetime('now')
+         WHERE status = 'in_progress'
+           AND sessionId IN (
+             SELECT id FROM agent_sessions
+             WHERE status IN ('completed','interrupted','error','max_turns')
+           )`,
+      )
+      .run();
+    if (r.changes > 0) {
+      logger.info({ changes: r.changes }, "reconciled orphan in_progress agent_tasks");
+    }
+  } catch (e) {
+    logger.warn({ err: e }, "reconcileStaleInProgressTasks failed");
+  }
+}
+
+type AgentTaskRow = {
+  id: string;
+  title: string;
+  updatedAt: string;
+  status?: string;
+  priority?: number | null;
+  [key: string]: unknown;
+};
+
+/** Tie-break when `updatedAt` is equal: more actionable status wins. */
+function taskStatusDedupeRank(status: unknown): number {
+  switch (String(status ?? "")) {
+    case "in_progress":
+      return 0;
+    case "pending":
+      return 1;
+    case "completed":
+      return 2;
+    case "cancelled":
+      return 3;
+    default:
+      return 9;
+  }
+}
+
+function pickTaskRowForDedupe(prev: AgentTaskRow, row: AgentTaskRow): AgentTaskRow {
+  const a = String(row.updatedAt ?? "");
+  const b = String(prev.updatedAt ?? "");
+  if (a > b) return row;
+  if (a < b) return prev;
+  const rp = taskStatusDedupeRank(prev.status);
+  const rr = taskStatusDedupeRank(row.status);
+  if (rr !== rp) return rr < rp ? row : prev;
+  return row.id > prev.id ? row : prev;
+}
+
+/**
+ * Same todo text often appears twice with different ids (reconciler cancelled one row; model wrote a fresh pending).
+ * One row per trimmed title: newest `updatedAt` wins; on ties prefer in_progress → … → cancelled.
+ */
+function dedupeTasksByTitle(rows: AgentTaskRow[]): AgentTaskRow[] {
+  const byKey = new Map<string, AgentTaskRow>();
+  for (const row of rows) {
+    const raw = typeof row.title === "string" ? row.title.trim().replace(/\s+/g, " ") : "";
+    const key = raw.length > 0 ? raw : row.id;
+    const prev = byKey.get(key);
+    if (!prev) {
+      byKey.set(key, row);
+      continue;
+    }
+    byKey.set(key, pickTaskRowForDedupe(prev, row));
+  }
+  const out = Array.from(byKey.values());
+  out.sort((x, y) => {
+    const px = Number(x.priority ?? 0);
+    const py = Number(y.priority ?? 0);
+    if (px !== py) return px - py;
+    return String(y.updatedAt ?? "").localeCompare(String(x.updatedAt ?? ""));
+  });
+  return out;
+}
 
 router.get("/", (req, res) => {
   const profileId = String(req.query.profileId ?? "");
   const sessionId = String(req.query.sessionId ?? "");
   const db = getDb();
+
+  reconcileStaleInProgressTasks(db);
 
   let sql = "SELECT * FROM agent_tasks";
   const conditions: string[] = [];
@@ -19,8 +105,9 @@ router.get("/", (req, res) => {
   if (conditions.length) sql += " WHERE " + conditions.join(" AND ");
   sql += " ORDER BY priority ASC, updatedAt DESC LIMIT 200";
 
-  const rows = db.prepare(sql).all(...params);
-  res.json({ tasks: rows });
+  const rows = db.prepare(sql).all(...params) as AgentTaskRow[];
+  const tasks = dedupeTasksByTitle(rows);
+  res.json({ tasks });
 });
 
 const UpdateBody = z.object({

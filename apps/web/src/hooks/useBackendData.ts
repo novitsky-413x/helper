@@ -1,8 +1,35 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { AgentTask, AgentTaskStatus } from "@helper/shared";
 import type { McpForm } from "../components/McpModal";
 import type { ModelCatalog, McpServer, MemoryRow, Profile, TaskCategory, UsageSnapshot, ModelHealthEntry } from "../types/appTypes";
+import { useAppStore } from "../store/index.js";
 
 const LS_PROFILE = "helper-active-profile";
+
+const TASK_STATUSES = new Set<AgentTaskStatus>(["pending", "in_progress", "completed", "cancelled"]);
+
+function taskRowToAgentTask(row: Record<string, unknown>): AgentTask | null {
+  const id = typeof row.id === "string" ? row.id : null;
+  const title = typeof row.title === "string" ? row.title : null;
+  const status = typeof row.status === "string" ? (row.status as AgentTaskStatus) : null;
+  if (!id || !title || !status || !TASK_STATUSES.has(status)) return null;
+  const priority = typeof row.priority === "number" ? row.priority : 0;
+  const createdAt = typeof row.createdAt === "string" ? row.createdAt : new Date().toISOString();
+  const updatedAt = typeof row.updatedAt === "string" ? row.updatedAt : createdAt;
+  return {
+    id,
+    profileId: typeof row.profileId === "string" ? row.profileId : undefined,
+    sessionId: typeof row.sessionId === "string" ? row.sessionId : undefined,
+    title,
+    description: typeof row.description === "string" ? row.description : undefined,
+    status,
+    priority,
+    parentId: typeof row.parentId === "string" ? row.parentId : undefined,
+    result: typeof row.result === "string" ? row.result : undefined,
+    createdAt,
+    updatedAt,
+  };
+}
 
 export function useBackendData({
   profileDeleteConfirm,
@@ -127,6 +154,24 @@ export function useBackendData({
     }
   }, [activeProfile]);
 
+  const loadAgentTasks = useCallback(async () => {
+    const pid = activeProfile?.id;
+    if (!pid) {
+      useAppStore.getState().setAgentTasks([]);
+      return;
+    }
+    try {
+      const r = await fetch(`/api/tasks?profileId=${encodeURIComponent(pid)}`);
+      if (!r.ok) return;
+      const j = (await r.json()) as { tasks?: Record<string, unknown>[] };
+      const raw = j.tasks ?? [];
+      const tasks = raw.map(taskRowToAgentTask).filter((t): t is AgentTask => t != null);
+      useAppStore.getState().setAgentTasks(tasks);
+    } catch {
+      /* ignore */
+    }
+  }, [activeProfile?.id]);
+
   const loadMcp = useCallback(async () => {
     const r = await fetch("/api/mcp/servers");
     if (!r.ok) return;
@@ -174,6 +219,13 @@ export function useBackendData({
     }, 0);
     return () => window.clearTimeout(timer);
   }, [loadUsage, activeProfile?.id]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadAgentTasks();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loadAgentTasks]);
 
   const addProfile = useCallback(async () => {
     const name = newProfileName.trim() || "Profile";

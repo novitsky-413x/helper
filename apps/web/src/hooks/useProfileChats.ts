@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { Message } from "@ai-sdk/react";
 import type { Profile } from "../types/appTypes";
+import { useAppStore } from "../store/index.js";
 
 const LS_PROFILE_CHATS = "helper-profile-chats";
 
@@ -95,6 +96,7 @@ export function useProfileChats(params: {
         localStorage.setItem(LS_PROFILE_CHATS, JSON.stringify(profileChatsRef.current));
       }
       setMessages([]);
+      useAppStore.getState().clearTerminalOutput();
     },
   };
 }

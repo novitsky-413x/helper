@@ -2,7 +2,10 @@ import type { z } from "zod";
 import type { Server as SocketIOServer } from "socket.io";
 
 export interface ToolContext {
+  /** SQLite `profiles.id` (learning plans, agent_tasks, etc.). */
   profileId?: string;
+  /** Mem0 namespace (`profile.mem0UserId`); use for `manage_memory` / retrieval. */
+  mem0UserId?: string;
   agentSessionId?: string;
   abortSignal?: AbortSignal;
   emitProgress: (data: Record<string, unknown>) => void;

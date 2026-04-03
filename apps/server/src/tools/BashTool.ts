@@ -37,6 +37,9 @@ export const BashTool = buildTool({
   isConcurrencySafe: false,
 
   async call(input, context) {
+    if (context.abortSignal?.aborted) {
+      return "[aborted]";
+    }
     const timeout = input.timeout ?? 30000;
     const { shell, args } = getShell();
     const sessionId = `bash-${++processCounter}`;
@@ -50,7 +53,8 @@ export const BashTool = buildTool({
       io?.of("/terminal").emit("terminal:output", {
         sessionId,
         chunk: `$ ${input.command}\n`,
-        stream: "stdin",
+        // Client store only accepts stdout | stderr; this is a UI echo of the command, not process stdin.
+        stream: "stdout",
       });
 
       const proc = spawn(shell, [...args, input.command], {
@@ -60,6 +64,28 @@ export const BashTool = buildTool({
       });
 
       activeProcesses.set(sessionId, proc);
+
+      const detachAbort =
+        context.abortSignal && !context.abortSignal.aborted
+          ? (() => {
+              const sig = context.abortSignal!;
+              const onAbort = () => {
+                if (resolved) return;
+                resolved = true;
+                if (timer) clearTimeout(timer);
+                try {
+                  proc.kill("SIGTERM");
+                } catch {
+                  /* ignore */
+                }
+                activeProcesses.delete(sessionId);
+                const tail = (stdout + stderr).slice(-2000);
+                resolve(`[aborted]\n${tail}`);
+              };
+              sig.addEventListener("abort", onAbort, { once: true });
+              return () => sig.removeEventListener("abort", onAbort);
+            })()
+          : null;
 
       proc.stdout?.on("data", (data: Buffer) => {
         const chunk = data.toString();
@@ -84,6 +110,7 @@ export const BashTool = buildTool({
       const timer = input.background ? null : setTimeout(() => {
         if (!resolved) {
           resolved = true;
+          detachAbort?.();
           try { proc.kill("SIGTERM"); } catch { /* ignore */ }
           activeProcesses.delete(sessionId);
           const output = (stdout + stderr).slice(-4000);
@@ -93,12 +120,14 @@ export const BashTool = buildTool({
 
       if (input.background) {
         resolved = true;
+        detachAbort?.();
         resolve(`Command started in background (session: ${sessionId}). PID: ${proc.pid}`);
         return;
       }
 
       proc.on("close", (code) => {
         if (timer) clearTimeout(timer);
+        detachAbort?.();
         activeProcesses.delete(sessionId);
         if (!resolved) {
           resolved = true;
@@ -112,6 +141,7 @@ export const BashTool = buildTool({
 
       proc.on("error", (err) => {
         if (timer) clearTimeout(timer);
+        detachAbort?.();
         activeProcesses.delete(sessionId);
         if (!resolved) {
           resolved = true;

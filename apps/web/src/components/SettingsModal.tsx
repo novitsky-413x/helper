@@ -159,6 +159,7 @@ export function SettingsModal(props: {
             <div className="row">
               <input
                 type="text"
+                id="settings-new-profile-name"
                 name="new-profile-name"
                 autoComplete="off"
                 placeholder={props.tx.newProfileName}

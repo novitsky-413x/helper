@@ -1,4 +1,5 @@
-import { Router } from 'express';
+import { Router, type Response } from 'express';
+import { AuthenticationError, PermissionDeniedError } from 'together-ai';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
@@ -13,6 +14,7 @@ import {
 } from 'ai';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
+import { repairStreamToolCall } from '../pipeline/toolCallRepair.js';
 import { listChatModelsCached } from '../togetherModels.js';
 import {
     getModelCatalog,
@@ -74,6 +76,22 @@ import { sanitizeCoreMessages } from '../pipeline/sanitize.js';
 
 const router = Router();
 
+function isTogetherCredentialError(e: unknown): e is AuthenticationError | PermissionDeniedError {
+    return e instanceof AuthenticationError || e instanceof PermissionDeniedError;
+}
+
+/** Together list-models / catalog: invalid key should not look like an internal server error. */
+function sendTogetherCredentialError(res: Response, e: unknown): boolean {
+    if (!isTogetherCredentialError(e)) return false;
+    res.status(502).json({
+        error:
+            'Together AI rejected the API key (HTTP ' +
+            String(e.status) +
+            '). Update TOGETHER_API_KEY in your .env with a valid key from the Together dashboard.',
+    });
+    return true;
+}
+
 const ChatBody = z.object({
     messages: z.array(z.unknown()),
     model: z.string().optional(),
@@ -91,6 +109,10 @@ router.get('/models', async (_req, res) => {
         const models = await listChatModelsCached();
         res.json({ models });
     } catch (e) {
+        if (sendTogetherCredentialError(res, e)) {
+            logger.warn({ err: e }, 'GET /api/models: Together API credentials rejected');
+            return;
+        }
         logger.error({ err: e }, 'GET /api/models failed');
         res.status(500).json({ error: String(e) });
     }
@@ -109,6 +131,10 @@ router.get('/model-catalog', async (_req, res) => {
         }
         res.json({ catalog: { ...catalog, healthByModel } });
     } catch (e) {
+        if (sendTogetherCredentialError(res, e)) {
+            logger.warn({ err: e }, 'GET /api/model-catalog: Together API credentials rejected');
+            return;
+        }
         logger.error({ err: e }, 'GET /api/model-catalog failed');
         res.status(500).json({ error: String(e) });
     }
@@ -805,7 +831,8 @@ ${task}`,
 
         // Build agent tool set (bash, file, web search, learning, wiki, todo)
         const toolContext: ToolContext = {
-            profileId: mem0UserId ?? profileId ?? undefined,
+            profileId: profileId ?? undefined,
+            mem0UserId: mem0UserId ?? undefined,
             agentSessionId: undefined,
             emitProgress: () => {},
             io: getIO(),
@@ -822,97 +849,89 @@ ${task}`,
             const agentSessionId = randomUUID();
             pipeDataStreamToResponse(res, {
                 execute: async (dataStream) => {
-                    const loopResult = await runAgentLoop({
-                        sessionId: agentSessionId,
-                        profileId: mem0UserId ?? profileId ?? undefined,
-                        mem0UserId: mem0UserId ?? undefined,
-                        model: effectiveModel,
-                        system,
-                        messages: cleanedUiMessages as Message[],
-                        mcpServers: mcpRows,
-                        catalogModels: catalog.models,
-                        maxTurns: config.maxToolRounds ?? 16,
-                        locale: agentUiLocale,
-                        onText: (chunk) => {
-                            dataStream.write(formatDataStreamPart('text', chunk));
-                        },
-                    });
-                    if (loopResult.status === 'error' && !loopResult.text) {
-                        const errNote =
-                            agentUiLocale === 'en'
-                                ? '\n\n⚠️ The agent loop ended with an error. Try again or switch models.'
-                                : '\n\n⚠️ Agent loop завершился с ошибкой. Попробуйте повторить запрос или сменить модель.';
-                        dataStream.write(formatDataStreamPart('text', errNote));
-                    }
-
-                    // Write memory for agent mode (same as non-agent onFinish)
-                    let memoryWriteLastOk: boolean | null = null;
-                    if (mem0UserId && lastUserText && loopResult.text) {
-                        try {
-                            memoryWriteLastOk = await addConversationToMemory(mem0UserId, lastUserText, loopResult.text);
-                        } catch (e) {
-                            memoryWriteLastOk = false;
-                            logger.warn({ err: e, mem0UserId }, 'mem0 addConversation failed (agent mode)');
+                    const ac = new AbortController();
+                    const onClientGone = () => ac.abort();
+                    req.on('close', onClientGone);
+                    try {
+                        const loopResult = await runAgentLoop({
+                            sessionId: agentSessionId,
+                            profileId: profileId ?? undefined,
+                            mem0UserId: mem0UserId ?? undefined,
+                            model: effectiveModel,
+                            system,
+                            messages: cleanedUiMessages as Message[],
+                            mcpServers: mcpRows,
+                            catalogModels: catalog.models,
+                            maxTurns: config.maxToolRounds ?? 16,
+                            locale: agentUiLocale,
+                            abortSignal: ac.signal,
+                            extraTools: {
+                                ...imageTools,
+                                ...audioTools,
+                                ...memoryTools,
+                                ...delegateTool,
+                            },
+                            onText: (chunk) => {
+                                dataStream.write(formatDataStreamPart('text', chunk));
+                            },
+                        });
+                        if (loopResult.status === 'error' && !loopResult.text) {
+                            const errNote =
+                                agentUiLocale === 'en'
+                                    ? '\n\n⚠️ The agent loop ended with an error. Try again or switch models.'
+                                    : '\n\n⚠️ Agent loop завершился с ошибкой. Попробуйте повторить запрос или сменить модель.';
+                            dataStream.write(formatDataStreamPart('text', errNote));
                         }
-                    }
 
-                    finalizeUsage({
-                        resolvedModel: effectiveModel,
-                        promptTokens: null,
-                        completionTokens: null,
-                        totalTokens: loopResult.totalTokens || null,
-                        memoryWriteLastOk,
-                    });
+                        let memoryWriteLastOk: boolean | null = null;
+                        if (mem0UserId && lastUserText && loopResult.text) {
+                            try {
+                                memoryWriteLastOk = await addConversationToMemory(
+                                    mem0UserId,
+                                    lastUserText,
+                                    loopResult.text,
+                                );
+                            } catch (e) {
+                                memoryWriteLastOk = false;
+                                logger.warn({ err: e, mem0UserId }, 'mem0 addConversation failed (agent mode)');
+                            }
+                        }
+
+                        finalizeUsage({
+                            resolvedModel: effectiveModel,
+                            promptTokens: null,
+                            completionTokens: null,
+                            totalTokens: loopResult.totalTokens || null,
+                            memoryWriteLastOk,
+                        });
+                    } finally {
+                        req.removeListener('close', onClientGone);
+                    }
                 },
             });
             return;
         }
+
+        const nonAgentAbort = new AbortController();
+        const onNonAgentClientGone = () => nonAgentAbort.abort();
+        req.on('close', onNonAgentClientGone);
+        const cleanupNonAgentAbortListener = () => req.removeListener('close', onNonAgentClientGone);
+        res.once('finish', cleanupNonAgentAbortListener);
+        res.once('close', cleanupNonAgentAbortListener);
 
         const result = streamText({
             model: togetherLlm(effectiveModel),
             system,
             messages: core,
             maxSteps: config.maxToolRounds,
+            abortSignal: nonAgentAbort.signal,
             tools: { ...agentTools, ...mcpTools, ...delegateTool, ...imageTools, ...audioTools, ...memoryTools },
             toolChoice:
                 (likelyImageRequest || likelyImageEditRequest || likelyPriorImageFollowupEdit)
                     ? { type: 'tool', toolName: 'generate_image' }
                     : 'auto',
-            experimental_repairToolCall: async ({ toolCall }) => {
-                const mk = (args: Record<string, unknown>) => ({
-                    toolCallType: 'function' as const,
-                    toolCallId: toolCall.toolCallId,
-                    toolName: toolCall.toolName,
-                    args: JSON.stringify(args),
-                });
-                logger.warn(
-                    { toolName: toolCall.toolName, args: toolCall.args },
-                    'invalid tool call args — attempting repair',
-                );
-                try {
-                    const raw = typeof toolCall.args === 'string' ? JSON.parse(toolCall.args) : toolCall.args;
-
-                    if (toolCall.toolName === 'generate_image' && raw && !raw.prompt) {
-                        if (raw.type === 'image' || raw.markdown || raw.url) {
-                            logger.warn('model echoed previous image result as args — skipping duplicate call');
-                            return null;
-                        }
-                    }
-
-                    if (toolCall.toolName === 'manage_memory' && raw && !raw.action) {
-                        if (Array.isArray(raw.memory)) {
-                            const first = raw.memory[0];
-                            if (first?.id && first?.text) return mk({ action: 'update', memoryId: first.id, text: first.text });
-                            if (first?.text) return mk({ action: 'add', text: first.text });
-                        }
-                        if (raw.text) return mk({ action: 'add', text: raw.text });
-                    }
-                } catch {
-                    // parse failed
-                }
-                logger.error({ toolName: toolCall.toolName }, 'tool call repair failed, skipping');
-                return null;
-            },
+            experimental_repairToolCall: async ({ toolCall }) =>
+                repairStreamToolCall(toolCall, { variant: 'chat' }),
             onError: ({ error }) => {
                 logger.error(
                     { err: error, model: effectiveModel },

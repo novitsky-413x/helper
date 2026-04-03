@@ -22,7 +22,7 @@ export const MemoryTool = buildTool({
   isConcurrencySafe: false,
 
   async call(input, context) {
-    const userId = context.profileId;
+    const userId = context.mem0UserId ?? context.profileId;
     if (!userId) return "No memory profile active.";
 
     try {

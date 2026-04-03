@@ -19,6 +19,7 @@ import { formatPricePerMillion, useAnalyticsMetrics } from './hooks/useAnalytics
 import { Sidebar } from './components/Sidebar';
 import { NotificationToast } from './components/NotificationToast';
 import { useAppStore } from './store/index.js';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import './App.css';
 
 const LearningDashboard = lazy(async () => {
@@ -40,6 +41,34 @@ const BottomPanel = lazy(async () => {
 
 const LS_UI_LANG = 'helper-ui-lang';
 const LS_PROFILE_VOICE_MAP = 'helper-profile-voice-map';
+const LS_CHAT_SESSIONS_RAIL = 'helper-chat-sessions-rail-open';
+/** Profiles for which legacy `helper-profile-chats` was already imported to SQLite (avoids duplicate sessions). */
+const LS_LEGACY_CHAT_IMPORTED = 'helper-legacy-chat-imported';
+/** Survives React Strict Mode / HMR remounts; paired with `LS_LEGACY_CHAT_IMPORTED` after success. */
+const legacyChatImportInFlight = new Set<string>();
+
+function profileLegacyChatAlreadyImported(profileId: string): boolean {
+    try {
+        const raw = localStorage.getItem(LS_LEGACY_CHAT_IMPORTED);
+        if (!raw) return false;
+        const ids = JSON.parse(raw) as unknown;
+        return Array.isArray(ids) && ids.includes(profileId);
+    } catch {
+        return false;
+    }
+}
+
+function markProfileLegacyChatImported(profileId: string): void {
+    try {
+        const raw = localStorage.getItem(LS_LEGACY_CHAT_IMPORTED);
+        const parsed = raw ? JSON.parse(raw) : [];
+        const list = Array.isArray(parsed) ? [...parsed] : [];
+        if (!list.includes(profileId)) list.push(profileId);
+        localStorage.setItem(LS_LEGACY_CHAT_IMPORTED, JSON.stringify(list));
+    } catch {
+        /* ignore */
+    }
+}
 
 type TtsVoice = string;
 
@@ -77,6 +106,31 @@ function messageText(m: { content?: string; parts?: Array<{ type: string; text?:
     return m.content ?? '';
 }
 
+/** Same copy as server `agentStreamFooters` — used when the fetch aborts before the streamed footer arrives. */
+function agentInterruptedFooter(uiLang: UiLang): string {
+    return uiLang === 'en'
+        ? '\n\n⏹️ Agent execution was stopped.'
+        : '\n\n⏹️ Выполнение агента остановлено.';
+}
+
+function withAgentStopFooter<T extends { content?: string; parts?: Array<{ type: string; text?: string }> }>(
+    m: T,
+    footer: string,
+): T {
+    const base = messageText(m);
+    if (base.includes('⏹️')) return m;
+    const prevContent = m.content ?? '';
+    const parts = m.parts ? [...m.parts] : [];
+    const ti = parts.findIndex((p) => p.type === 'text');
+    if (ti >= 0) {
+        const p = parts[ti] as { type: 'text'; text: string };
+        parts[ti] = { ...p, text: (p.text ?? '') + footer };
+    } else {
+        parts.push({ type: 'text', text: footer });
+    }
+    return { ...m, content: prevContent + footer, parts } as T;
+}
+
 function stripAgentArtifacts(text: string): string {
     if (!text) return '';
     let out = text;
@@ -89,6 +143,20 @@ function stripAgentArtifacts(text: string): string {
     // Remove orphaned routing words before Cyrillic/Latin text
     out = out.replace(/\b(?:final|commentary)(?=[А-Яа-яA-Z])/g, '');
     out = out.replace(/to=use_other_model/gi, '');
+    // GPT-OSS / Harmony plaintext leaks — keep in sync with server pipeline/sanitize.ts
+    out = out.replace(/\bto=functions\.[a-zA-Z0-9_]+\b/gi, '');
+    out = out.replace(/\bjsonfunctions\.[a-zA-Z0-9_]+\b/gi, '');
+    out = out.replace(/to=assistant(?:commentary|final|analysis)?/gi, '');
+    out = out.replace(/assistant(?:commentary|final|analysis)/gi, '');
+    out = out.replace(/\bto=user\b/gi, '');
+    out = out.replace(/\buser(?:commentary|final|analysis)\b/gi, '');
+    out = out.replace(/"{3}Updated \d+ task\(s\)\.?"{2,}/gi, '');
+    out = out.replace(/""Updated \d+ task\(s\)\.?""/gi, '');
+    out = out.replace(/""+analysis/gi, '');
+    out = out.replace(/\banalysisNeed\b[\s\S]{0,1500}?Let's call\./gi, '');
+    out = out.replace(/\s*""+/g, ' ');
+    out = out.replace(/\.{3,}/g, '...');
+    out = out.replace(/[ \t]{2,}/g, ' ');
     // Strip tool result tags that the model may echo
     out = out.replace(/\[img:https?:\/\/[^\]\s]+\][^\n]*/g, '');
     out = out.replace(/\[audio:\/api\/audio\/file\/[\w-]+\][^\n]*/g, '');
@@ -187,6 +255,21 @@ export default function App() {
     const [memoriesOpen, setMemoriesOpen] = useState(false);
     const [mcpOpen, setMcpOpen] = useState(false);
     const [analyticsOpen, setAnalyticsOpen] = useState(false);
+    const [sessionsRailOpen, setSessionsRailOpen] = useState(() => {
+        try {
+            return localStorage.getItem(LS_CHAT_SESSIONS_RAIL) !== '0';
+        } catch {
+            return true;
+        }
+    });
+
+    useEffect(() => {
+        try {
+            localStorage.setItem(LS_CHAT_SESSIONS_RAIL, sessionsRailOpen ? '1' : '0');
+        } catch {
+            /* ignore */
+        }
+    }, [sessionsRailOpen]);
 
     useEffect(() => {
         const mq = window.matchMedia('(max-width: 640px)');
@@ -262,6 +345,41 @@ export default function App() {
         },
     });
     const busy = status === 'submitted' || status === 'streaming';
+
+    const agentStopRequestedRef = useRef(false);
+    const handleChatStop = useCallback(() => {
+        if (status !== 'submitted' && status !== 'streaming') return;
+        if (agentMode) agentStopRequestedRef.current = true;
+        stop();
+    }, [agentMode, status, stop]);
+
+    useEffect(() => {
+        if (status !== 'ready') return;
+        if (!agentStopRequestedRef.current) return;
+        agentStopRequestedRef.current = false;
+        if (!agentMode) return;
+        const footer = agentInterruptedFooter(uiLang);
+        setMessages((prev) => {
+            if (prev.length === 0) return prev;
+            const last = prev[prev.length - 1];
+            if (last.role === 'user') {
+                return [
+                    ...prev,
+                    {
+                        id: crypto.randomUUID(),
+                        role: 'assistant' as const,
+                        content: footer,
+                        createdAt: new Date(),
+                        parts: [{ type: 'text' as const, text: footer }],
+                    },
+                ];
+            }
+            if (last.role === 'assistant') {
+                return [...prev.slice(0, -1), withAgentStopFooter(last, footer)];
+            }
+            return prev;
+        });
+    }, [status, agentMode, uiLang, setMessages]);
 
     const setAgentProgress = useAppStore((s) => s.setAgentProgress);
     const prevBusyRef = useRef(false);
@@ -491,33 +609,59 @@ export default function App() {
         return () => clearTimeout(timer);
     }, [messages, activeChatSessionId]);
 
-    // One-time migration from localStorage to server sessions
-    const migrationDoneRef = useRef(false);
+    // One-time migration: `helper-profile-chats` → server `chat_sessions`.
+    // `useRef` guards fail under Strict Mode (remount resets the ref) and caused many duplicate imports titled "Migrated Chat".
     useEffect(() => {
-        if (migrationDoneRef.current || !activeProfile?.id) return;
+        const profileId = activeProfile?.id;
+        if (!profileId) return;
+        if (profileLegacyChatAlreadyImported(profileId)) return;
+
         const chatSessions = useAppStore.getState().chatSessions;
         if (chatSessions.length > 0) return;
 
         const raw = localStorage.getItem('helper-profile-chats');
         if (!raw) return;
+
+        let profileMsgs: unknown[] | undefined;
         try {
             const parsed = JSON.parse(raw) as Record<string, unknown[]>;
-            const profileMsgs = parsed[activeProfile.id];
-            if (!profileMsgs || profileMsgs.length === 0) return;
+            profileMsgs = parsed[profileId];
+        } catch {
+            return;
+        }
+        if (!profileMsgs || profileMsgs.length === 0) return;
 
-            migrationDoneRef.current = true;
-            fetch('/api/chat-sessions/import', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    sessions: [{ profileId: activeProfile.id, title: 'Migrated Chat', messages: profileMsgs }],
-                }),
-            }).then(() => {
-                return fetch(`/api/chat-sessions?profileId=${activeProfile.id}`);
-            }).then(res => res.json()).then(data => {
+        if (legacyChatImportInFlight.has(profileId)) return;
+        legacyChatImportInFlight.add(profileId);
+
+        fetch('/api/chat-sessions/import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                sessions: [
+                    {
+                        profileId,
+                        title: 'Перенесённый чат',
+                        messages: profileMsgs,
+                    },
+                ],
+            }),
+        })
+            .then((res) => {
+                if (!res.ok) throw new Error('import failed');
+                return fetch(`/api/chat-sessions?profileId=${profileId}`);
+            })
+            .then((res) => res.json())
+            .then((data) => {
+                markProfileLegacyChatImported(profileId);
                 useAppStore.getState().setChatSessions(data.sessions ?? []);
-            }).catch(() => {});
-        } catch { /* ignore */ }
+            })
+            .catch(() => {
+                /* retry allowed on next load until a successful import marks LS */
+            })
+            .finally(() => {
+                legacyChatImportInFlight.delete(profileId);
+            });
     }, [activeProfile?.id]);
 
     return (
@@ -525,20 +669,59 @@ export default function App() {
             <NotificationToast />
             <div className={`layout ${sidebarOpen ? 'with-sidebar' : ''}`}>
                 <Sidebar activeProfile={activeProfile} tx={tx} />
-                {activeView === 'chat' && (
-                    <div className="chat-history-panel">
-                        <ChatSessionList
-                            profileId={activeProfile?.id ?? null}
-                            onSessionSelect={(_sessionId, msgs) => {
-                                setMessages(msgs as Parameters<typeof setMessages>[0]);
-                            }}
-                            onNewChat={() => {
-                                setMessages([]);
-                            }}
-                        />
-                    </div>
-                )}
                 <main className="chat-main">
+                    <div
+                        className={`chat-main-body ${activeView === 'chat' ? 'chat-main-body--with-rail chat-main-body--with-tool-dock' : ''}`}
+                    >
+                        {activeView === 'chat' && (
+                            <aside
+                                className={`chat-sessions-rail ${sessionsRailOpen ? 'is-open' : 'is-collapsed'}`}
+                                aria-label={tx.chatSessionsRailTitle}
+                            >
+                                <div className="chat-sessions-rail-head">
+                                    <button
+                                        type="button"
+                                        className="chat-sessions-rail-toggle"
+                                        onClick={() => setSessionsRailOpen((o) => !o)}
+                                        aria-expanded={sessionsRailOpen}
+                                        aria-label={
+                                            sessionsRailOpen
+                                                ? tx.chatSessionsRailCollapse
+                                                : tx.chatSessionsRailExpand
+                                        }
+                                        title={
+                                            sessionsRailOpen
+                                                ? tx.chatSessionsRailCollapse
+                                                : tx.chatSessionsRailExpand
+                                        }
+                                    >
+                                        {sessionsRailOpen ? (
+                                            <ChevronLeft size={18} aria-hidden />
+                                        ) : (
+                                            <ChevronRight size={18} aria-hidden />
+                                        )}
+                                    </button>
+                                    {sessionsRailOpen && (
+                                        <span className="chat-sessions-rail-title">{tx.chatSessionsRailTitle}</span>
+                                    )}
+                                </div>
+                                {sessionsRailOpen && (
+                                    <div className="chat-sessions-rail-scroll" id="chat-sessions-rail-panel">
+                                        <ChatSessionList
+                                            profileId={activeProfile?.id ?? null}
+                                            onSessionSelect={(_sessionId, msgs) => {
+                                                setMessages(msgs as Parameters<typeof setMessages>[0]);
+                                            }}
+                                            onNewChat={() => {
+                                                setMessages([]);
+                                                useAppStore.getState().clearTerminalOutput();
+                                            }}
+                                        />
+                                    </div>
+                                )}
+                            </aside>
+                        )}
+                        <div className="chat-main-column">
                     <AppHeader
                         tx={tx}
                         models={models}
@@ -660,7 +843,7 @@ export default function App() {
                         setInput={setInput}
                         handleInputChange={handleInputChange}
                         busy={busy}
-                        stop={stop}
+                        stop={handleChatStop}
                         pendingImageDataUrl={pendingImageDataUrl}
                         setPendingImageDataUrl={setPendingImageDataUrl}
                         pendingImageName={pendingImageName}
@@ -701,9 +884,13 @@ export default function App() {
                             />
                         }
                     />}
-                    <Suspense fallback={null}>
-                        <BottomPanel tx={tx} />
-                    </Suspense>
+                        </div>
+                        {activeView === 'chat' && (
+                            <Suspense fallback={null}>
+                                <BottomPanel tx={tx} />
+                            </Suspense>
+                        )}
+                    </div>
                 </main>
             </div>
             <MemoryModal

@@ -119,12 +119,22 @@ router.post("/import", (req, res) => {
   const insert = db.prepare(
     "INSERT INTO chat_sessions (id, profileId, title, messages, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?)"
   );
+  const migrationTitles = new Set(["Migrated Chat", "Перенесённый чат"]);
+  /** One legacy import per profile — avoids stacking rows when the client retries with a renamed title. */
+  const profileHasLegacyMigration = db.prepare(
+    "SELECT 1 FROM chat_sessions WHERE profileId = ? AND title IN ('Migrated Chat', 'Перенесённый чат') LIMIT 1"
+  );
+
   const importMany = db.transaction((sessions: typeof parsed.data.sessions) => {
     let count = 0;
     for (const s of sessions) {
+      const title = s.title ?? "Imported Chat";
+      if (migrationTitles.has(title) && profileHasLegacyMigration.get(s.profileId)) {
+        continue;
+      }
       const id = randomUUID();
       const now = new Date().toISOString();
-      insert.run(id, s.profileId, s.title ?? "Imported Chat", JSON.stringify(s.messages), s.createdAt ?? now, now);
+      insert.run(id, s.profileId, title, JSON.stringify(s.messages), s.createdAt ?? now, now);
       count++;
     }
     return count;

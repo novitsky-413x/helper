@@ -1,6 +1,6 @@
 import { Server as SocketIOServer } from "socket.io";
 import type { Server as HttpServer } from "node:http";
-import { config } from "./config.js";
+import { corsOrigin } from "./config.js";
 import { logger } from "./logger.js";
 
 let io: SocketIOServer | null = null;
@@ -8,7 +8,7 @@ let io: SocketIOServer | null = null;
 export function initSocketServer(httpServer: HttpServer): SocketIOServer {
   io = new SocketIOServer(httpServer, {
     cors: {
-      origin: config.webOrigin,
+      origin: corsOrigin,
       credentials: true,
     },
     path: "/socket.io",

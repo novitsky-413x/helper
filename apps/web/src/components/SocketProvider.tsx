@@ -30,7 +30,10 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
             maxTurns: number;
             toolName?: string;
             phase?: 'llm' | 'tool';
+            subAgent?: boolean;
         }) => {
+            // Sub-agent runs use a different sessionId; do not overwrite the main agent Turn N/M badge.
+            if (data.subAgent) return;
             const phase = data.phase ?? (data.toolName ? 'tool' : 'llm');
             setAgentProgress(data.turn, data.maxTurns, {
                 toolName: data.toolName ?? null,

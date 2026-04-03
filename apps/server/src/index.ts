@@ -4,7 +4,7 @@ import path from "node:path";
 import { existsSync, mkdirSync } from "node:fs";
 import { type IncomingMessage, type ServerResponse } from "node:http";
 import { fileURLToPath } from "node:url";
-import { config } from "./config.js";
+import { config, corsOrigin } from "./config.js";
 import { logger } from "./logger.js";
 import { pinoHttp } from "pino-http";
 import { refreshModelCatalog } from "./modelCatalog.js";
@@ -45,7 +45,7 @@ restoreUsageFromDb();
 const app = express();
 app.use(
   cors({
-    origin: config.webOrigin,
+    origin: corsOrigin,
     credentials: true,
     exposedHeaders: ["x-helper-resolved-model", "x-helper-base-model"],
   })

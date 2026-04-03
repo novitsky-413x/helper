@@ -19,9 +19,19 @@ import {
   getModelContextWindow,
 } from "./pipeline/contextManager.js";
 import type { TogetherModelRow } from "./togetherModels.js";
+import type { AgentTaskStatus } from "@helper/shared";
 import { sanitizeCoreMessages, sanitizeControlTokens } from "./pipeline/sanitize.js";
+import { repairStreamToolCall } from "./pipeline/toolCallRepair.js";
 
 export type AgentUiLocale = "ru" | "en";
+
+function isAbortLike(e: unknown): boolean {
+  if (e == null || typeof e !== "object") return false;
+  const name = (e as { name?: string }).name;
+  if (name === "AbortError") return true;
+  const msg = String((e as Error).message ?? "");
+  return /aborted|AbortError|The operation was aborted/i.test(msg);
+}
 
 export interface AgentLoopParams {
   sessionId: string;
@@ -98,7 +108,8 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
   ).run(sessionId, profileId ?? null);
 
   const toolContext: ToolContext = {
-    profileId: mem0UserId ?? profileId,
+    profileId,
+    mem0UserId,
     agentSessionId: sessionId,
     abortSignal,
     emitProgress: (data) => {
@@ -166,45 +177,8 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
         messages: coreMessages,
         tools: allTools,
         toolChoice: "auto",
-        experimental_repairToolCall: async ({ toolCall }) => {
-          logger.warn(
-            { toolName: toolCall.toolName, args: toolCall.args },
-            'agent loop: invalid tool call args — attempting repair',
-          );
-          try {
-            const raw = typeof toolCall.args === 'string' ? JSON.parse(toolCall.args) : toolCall.args;
-            if (toolCall.toolName === 'manage_memory' && raw && !raw.action) {
-              if (Array.isArray(raw.memory)) {
-                const first = raw.memory[0];
-                if (first?.id && first?.text)
-                  return {
-                    toolCallType: 'function' as const,
-                    toolCallId: toolCall.toolCallId,
-                    toolName: toolCall.toolName,
-                    args: JSON.stringify({ action: 'update', memoryId: first.id, text: first.text }),
-                  };
-                if (first?.text)
-                  return {
-                    toolCallType: 'function' as const,
-                    toolCallId: toolCall.toolCallId,
-                    toolName: toolCall.toolName,
-                    args: JSON.stringify({ action: 'add', text: first.text }),
-                  };
-              }
-              if (raw.text)
-                return {
-                  toolCallType: 'function' as const,
-                  toolCallId: toolCall.toolCallId,
-                  toolName: toolCall.toolName,
-                  args: JSON.stringify({ action: 'add', text: raw.text }),
-                };
-            }
-          } catch {
-            // parse failed
-          }
-          logger.error({ toolName: toolCall.toolName }, 'agent loop: tool call repair failed, skipping');
-          return null;
-        },
+        experimental_repairToolCall: async ({ toolCall }) =>
+          repairStreamToolCall(toolCall, { variant: "agent_loop" }),
         maxSteps: 1,
         abortSignal,
         onError: ({ error }) => {
@@ -220,6 +194,10 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
 
       try {
         for await (const part of result.fullStream) {
+          if (abortSignal?.aborted) {
+            status = "interrupted";
+            break;
+          }
           if (part.type === "text-delta") {
             rawAccum += part.textDelta;
             const cleaned = sanitizeControlTokens(rawAccum);
@@ -239,8 +217,20 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
           }
         }
       } catch (e) {
-        streamError = e;
-        logger.warn({ err: e, turn: turnCount }, "agent loop: stream error caught, recovering");
+        if (abortSignal?.aborted || isAbortLike(e)) {
+          status = "interrupted";
+          streamError = null;
+        } else {
+          streamError = e;
+          logger.warn({ err: e, turn: turnCount }, "agent loop: stream error caught, recovering");
+        }
+      }
+
+      assistantText = sanitizeControlTokens(rawAccum);
+
+      if (status === "interrupted") {
+        finalText = assistantText;
+        break;
       }
 
       if (streamError && toolCalls.length === 0 && !assistantText) {
@@ -251,8 +241,12 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
         break;
       }
 
-      const usage = await result.usage;
-      totalTokens += (usage?.totalTokens ?? 0);
+      try {
+        const usage = await result.usage;
+        totalTokens += usage?.totalTokens ?? 0;
+      } catch {
+        /* stream may be aborted before usage resolves */
+      }
 
       if (toolCalls.length === 0) {
         finalText = assistantText;
@@ -277,6 +271,11 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
 
       const toolResults: Array<{type: "tool-result"; toolCallId: string; toolName: string; result: string}> = [];
       for (const tc of toolCalls) {
+        if (abortSignal?.aborted) {
+          status = "interrupted";
+          finalText = assistantText;
+          break;
+        }
         io?.of("/agent").emit("agent:progress", {
           sessionId,
           turn: turnCount,
@@ -305,6 +304,10 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
           result: toolResult,
         });
         onToolResult?.(tc.toolName, toolResult);
+      }
+
+      if (status === "interrupted") {
+        break;
       }
 
       coreMessages.push({ role: "tool", content: toolResults });
@@ -339,6 +342,53 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
     ).run(turnCount, totalTokens, status, sessionId);
   } catch (e) {
     logger.warn({ err: e }, "failed to update agent_session");
+  }
+
+  // Model often sets a todo to in_progress via todo_write but never sends a final update when the run ends.
+  try {
+    const nowIso = new Date().toISOString();
+    const nextStatus: AgentTaskStatus | null =
+      status === "interrupted" || status === "error" || status === "max_turns"
+        ? "cancelled"
+        : status === "completed"
+          ? "pending"
+          : null;
+    if (nextStatus) {
+      const rows = db
+        .prepare(
+          `SELECT id, title, priority, createdAt, profileId FROM agent_tasks WHERE sessionId = ? AND status = 'in_progress'`,
+        )
+        .all(sessionId) as Array<{
+          id: string;
+          title: string;
+          priority: number | null;
+          createdAt: string;
+          profileId: string | null;
+        }>;
+      if (rows.length > 0) {
+        db.prepare(
+          `UPDATE agent_tasks SET status = ?, updatedAt = ? WHERE sessionId = ? AND status = 'in_progress'`,
+        ).run(nextStatus, nowIso, sessionId);
+        for (const row of rows) {
+          io?.of("/agent").emit("agent:task-update", {
+            id: row.id,
+            profileId: row.profileId ?? profileId,
+            sessionId,
+            title: row.title,
+            status: nextStatus,
+            priority: row.priority ?? 0,
+            createdAt: row.createdAt,
+            updatedAt: nowIso,
+          });
+        }
+        logger.info(
+          { sessionId, count: rows.length, nextStatus },
+          "agent loop: reconciled in_progress todos after run",
+        );
+      }
+    }
+  } catch (e) {
+    logger.warn({ err: e, sessionId }, "agent task end reconciliation failed");
   }
 
   return { text: finalText, turnCount, totalTokens, status };

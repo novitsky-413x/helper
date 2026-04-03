@@ -11,6 +11,45 @@ dotenv.config({
   override: true,
 });
 
+const isProduction = process.env.NODE_ENV === "production";
+
+/**
+ * CORS / Socket.io origin: in production, single WEB_ORIGIN. In dev, allow any
+ * http localhost port so Vite can bind 5173, 5175, … while the client still
+ * talks to :3001 (e.g. Socket.io).
+ */
+export function corsOrigin(
+  requestOrigin: string | undefined,
+  callback: (err: Error | null, allow?: boolean | string) => void,
+): void {
+  const primary = process.env.WEB_ORIGIN?.trim() || "http://localhost:5173";
+  if (isProduction) {
+    callback(null, primary);
+    return;
+  }
+  if (!requestOrigin) {
+    callback(null, true);
+    return;
+  }
+  try {
+    const u = new URL(requestOrigin);
+    if (
+      u.protocol === "http:" &&
+      (u.hostname === "localhost" || u.hostname === "127.0.0.1")
+    ) {
+      callback(null, requestOrigin);
+      return;
+    }
+  } catch {
+    /* ignore */
+  }
+  if (requestOrigin === primary) {
+    callback(null, true);
+    return;
+  }
+  callback(new Error(`CORS blocked: ${requestOrigin}`));
+}
+
 export const config = {
   port: Number(process.env.PORT) || 3001,
   webOrigin: process.env.WEB_ORIGIN || "http://localhost:5173",

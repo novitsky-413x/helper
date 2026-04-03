@@ -127,6 +127,10 @@ export type UiText = {
   bottomTabTasks: string;
   bottomTabAgentLog: string;
   bottomClosePanel: string;
+  /** Vertical right tool dock (terminal + tasks + agent) */
+  toolDockTitle: string;
+  toolDockExpand: string;
+  toolDockCollapse: string;
   bottomTasksEmpty: string;
   bottomAgentIdle: string;
   bottomAgentTurnLabel: string;
@@ -153,6 +157,10 @@ export type UiText = {
   sidebarReconnecting: string;
   sidebarConnected: string;
   sidebarDisconnected: string;
+  /** Chat session rail (inside main) */
+  chatSessionsRailTitle: string;
+  chatSessionsRailCollapse: string;
+  chatSessionsRailExpand: string;
   /** Learning view */
   learningTitle: string;
   learningEmpty: string;
@@ -319,6 +327,9 @@ export const UI_TEXT: Record<UiLang, UiText> = {
     bottomTabTasks: "Задачи",
     bottomTabAgentLog: "Агент",
     bottomClosePanel: "Закрыть панель",
+    toolDockTitle: "Инструменты",
+    toolDockExpand: "Развернуть панель",
+    toolDockCollapse: "Свернуть панель",
     bottomTasksEmpty: "Нет активных задач.",
     bottomAgentIdle: "Агент простаивает.",
     bottomAgentTurnLabel: "Ход",
@@ -342,6 +353,9 @@ export const UI_TEXT: Record<UiLang, UiText> = {
     sidebarReconnecting: "Переподключение…",
     sidebarConnected: "Подключено",
     sidebarDisconnected: "Нет связи",
+    chatSessionsRailTitle: "История чатов",
+    chatSessionsRailCollapse: "Свернуть список чатов",
+    chatSessionsRailExpand: "Развернуть список чатов",
     learningTitle: "Планы обучения",
     learningEmpty:
       "Пока нет планов. В чате введите /learn <тема>, чтобы создать план.",
@@ -501,6 +515,9 @@ export const UI_TEXT: Record<UiLang, UiText> = {
     bottomTabTasks: "Tasks",
     bottomTabAgentLog: "Agent",
     bottomClosePanel: "Close panel",
+    toolDockTitle: "Tools",
+    toolDockExpand: "Expand panel",
+    toolDockCollapse: "Collapse panel",
     bottomTasksEmpty: "No active tasks.",
     bottomAgentIdle: "Agent idle.",
     bottomAgentTurnLabel: "Turn",
@@ -524,6 +541,9 @@ export const UI_TEXT: Record<UiLang, UiText> = {
     sidebarReconnecting: "Reconnecting…",
     sidebarConnected: "Connected",
     sidebarDisconnected: "Disconnected",
+    chatSessionsRailTitle: "Chat history",
+    chatSessionsRailCollapse: "Collapse chat list",
+    chatSessionsRailExpand: "Expand chat list",
     learningTitle: "Learning Plans",
     learningEmpty: "No learning plans yet. Use /learn <topic> in chat to create one.",
     learningLesson: "Lesson",
